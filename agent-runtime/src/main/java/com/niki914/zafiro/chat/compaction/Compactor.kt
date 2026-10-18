@@ -51,9 +51,14 @@ class Compactor(
             contextTokens: Long,
             contextWindow: Long,
             thresholdRatio: Float = DEFAULT_THRESHOLD_RATIO,
+            reservedOutputTokens: Long = 0L,
         ): Boolean {
             if (thresholdRatio <= 0f || contextWindow <= 0L || contextTokens <= 0L) return false
-            val thresholdTokens = (contextWindow * thresholdRatio).toLong()
+            // 关键：请求里还给补全留了额度（deepseek-flash 默认 393,216），
+            // 那部分必须先从窗口里扣掉，否则「消息占比 62%」看起来没到 70%、
+            // 实际发出去却是 62% + 37% > 100%，直接被服务端拒绝。
+            val usableInput = (contextWindow - reservedOutputTokens).coerceAtLeast(1L)
+            val thresholdTokens = (usableInput * thresholdRatio).toLong()
             return contextTokens >= thresholdTokens
         }
 
@@ -144,6 +149,7 @@ class Compactor(
         force: Boolean = false,
         contextTokens: Long = 0L,
         contextWindow: Long = 0L,
+        reservedOutputTokens: Long = 0L,
     ): Boolean {
         val entries = session.conversation.value.history
         if (entries.isEmpty()) return false
@@ -153,7 +159,8 @@ class Compactor(
             msg is Message.User && SummaryBlock.strip(textOf(msg)).payload == null
         }
 
-        val isThresholdTriggered = shouldCompact(contextTokens, contextWindow, thresholdRatio)
+        val isThresholdTriggered =
+            shouldCompact(contextTokens, contextWindow, thresholdRatio, reservedOutputTokens)
 
         if (!force && !isThresholdTriggered) {
             return false
