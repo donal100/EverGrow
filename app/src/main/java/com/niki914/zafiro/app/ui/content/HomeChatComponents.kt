@@ -631,6 +631,7 @@ fun LiquidChatComposer(
         ) {
             ActionBarButton(
                 onClick = onAttachImageClick,
+                sizeSp = COMPOSER_BUTTON_SP,
                 modifier = Modifier.offset(x = (-6).dp),
             ) {
                 Icon(
@@ -656,6 +657,7 @@ fun LiquidChatComposer(
             ActionBarButton(
                 onClick = if (isGenerating) onStopClick else onSendClick,
                 enabled = true,
+                sizeSp = COMPOSER_BUTTON_SP,
                 // 环画在按钮自己的 modifier 上：与按钮同心，跟着 offset 一起走。
                 modifier = Modifier
                     .offset(x = 6.dp)
@@ -722,6 +724,7 @@ fun LiquidChatComposer(
         CompositionLocalProvider(LocalContentColor provides tint) {
             ActionBarButton(
                 onClick = { toggleRecording() },
+                sizeSp = COMPOSER_BUTTON_SP,
                 modifier = Modifier.offset(x = (-6).dp),
             ) {
                 if (isTranscribing) {
@@ -773,6 +776,9 @@ fun LiquidChatComposer(
     )
 }
 
+/** composer 里按钮的直径（sp）。默认 48 太大，这里取一半多点：再小就低于可点面积。 */
+private const val COMPOSER_BUTTON_SP = 30f
+
 /** 上下文环底轨的不透明度。 */
 private const val CONTEXT_RING_TRACK_ALPHA = 0.22f
 
@@ -780,7 +786,7 @@ private const val CONTEXT_RING_TRACK_ALPHA = 0.22f
 private val ContextRingStroke = 2.dp
 
 /** 发送按钮的圆直径，与 ActionBarButton 的 requiredSize 同口径（sp 换算）。 */
-private val ContextRingButtonDiameter = 48.sp
+private val ContextRingButtonDiameter = COMPOSER_BUTTON_SP.sp
 
 /**
  * 在发送按钮边缘画一圈上下文占用环。

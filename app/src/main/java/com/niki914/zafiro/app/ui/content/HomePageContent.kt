@@ -399,16 +399,27 @@ fun HomePageContent(
             return turn.id to text
         }
 
-        // 正文可能比 isGenerating 晚一步写进 blocks，所以读 latestUiState 并短暂等待
-        var snap = lastTurnReply()
+        // 正文比 isGenerating 晚一步写进 blocks，而且是流式追加的：实测 isGenerating 已经
+        // 变 false 时 blocks 里只有半句（"…with e"），于是念到一半就停 —— 听感上像说到一半睡过去。
+        // 所以必须等正文「不再变长」一小段时间，而不是等到「非空」就开念。
+        var reply = lastTurnReply()?.second.orEmpty()
+        var turnId = lastTurnReply()?.first ?: -1L
         var waited = 0
-        while ((snap == null || snap.second.isEmpty()) && waited < 4000) {
+        var stableFor = 0
+        while (waited < 8000) {
             delay(150)
             waited += 150
-            snap = lastTurnReply()
+            val snap = lastTurnReply()
+            val cur = snap?.second.orEmpty()
+            if (snap != null) turnId = snap.first
+            if (cur.isNotEmpty() && cur == reply) {
+                stableFor += 150
+                if (stableFor >= 600) break
+            } else {
+                stableFor = 0
+            }
+            reply = cur
         }
-        val turnId = snap?.first ?: -1L
-        val reply = snap?.second.orEmpty()
         voiceSpeaker.note(
             "hook fired: waited=" + waited + "ms turn=" + turnId + " replyChars=" + reply.length
         )
