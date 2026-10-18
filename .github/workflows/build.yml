@@ -37,23 +37,32 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x ./gradlew
 
-      - name: Restore debug keystore
-        # Without this, every CI run generates a NEW debug key, so each APK
-        # has a different signature and cannot upgrade the previous install.
-        uses: actions/cache@v4
-        with:
-          path: ~/.android/debug.keystore
-          key: debug-keystore-v1
-
-      - name: Ensure debug keystore exists
+      - name: Use committed debug keystore
+        # A signing identity must be byte-identical for every build or Android refuses
+        # to update over an existing install. actions/cache is best-effort (evictions
+        # silently produce new keys), so the keystore lives in the repo instead.
+        # This is a DEBUG key only: its password is the well-known "android" and it
+        # signs nothing but this fork's debug APKs.
         run: |
           mkdir -p ~/.android
-          if [ ! -f ~/.android/debug.keystore ]; then
+          if [ -f ci/debug.keystore ]; then
+            cp ci/debug.keystore ~/.android/debug.keystore
+            echo "using committed debug keystore"
+          else
+            echo "::warning::ci/debug.keystore missing - generating a THROWAWAY key. Updates will fail."
             keytool -genkeypair -v -keystore ~/.android/debug.keystore \
               -storepass android -keypass android -alias androiddebugkey \
               -keyalg RSA -keysize 2048 -validity 10000 \
               -dname "CN=Android Debug,O=Android,C=US"
           fi
+
+      - name: Publish keystore for commit (first run only)
+        if: ${{ hashFiles('ci/debug.keystore') == '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-keystore-for-commit
+          path: ~/.android/debug.keystore
+          retention-days: 7
 
       - name: Assemble debug
         run: ./gradlew assembleDebug --stacktrace --no-daemon
