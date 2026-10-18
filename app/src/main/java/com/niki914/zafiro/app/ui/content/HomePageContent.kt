@@ -350,7 +350,9 @@ fun HomePageContent(
     // —— 语音模式：回合结束后把最终回答念出来 ——
     // 只有真的观察到「生成中→结束」才念，避免打开历史会话时朗读旧消息；
     // 播的是 final 文本（流式中间态会被反复修正，边生成边念会不停改口）。
-    val voiceSpeaker = remember { VoiceReplySpeaker(LocalContext.current.applicationContext) }
+    // LocalContext.current 是 @Composable 调用，不能写在 remember{} 的 lambda 里（这条我犯过两次）
+    val voiceContext = LocalContext.current.applicationContext
+    val voiceSpeaker = remember { VoiceReplySpeaker(voiceContext) }
     var voiceSawGenerating by remember { mutableStateOf(false) }
     DisposableEffect(Unit) {
         onDispose { voiceSpeaker.release() }
@@ -527,6 +529,7 @@ fun HomePageContent(
         onInputChange = { value ->
             viewModel.sendIntent(HomeChatIntent.InputChanged(value))
         },
+        onToggleVoiceMode = { viewModel.sendIntent(HomeChatIntent.ToggleVoiceMode) },
         onSendClick = {
             val query = uiState.input.trim()
             val hasAttachments =
@@ -849,6 +852,7 @@ private fun HomePageContentBody(
     onToggleActionRow: (Long, ActionSource) -> Unit,
     turnBranches: Map<Long, TurnBranchState> = emptyMap(),
     onSwitchTurnBranch: (Long, Int) -> Unit = { _, _ -> },
+    onToggleVoiceMode: () -> Unit = {},
 ) {
 
     // 底部避让总高：composer 底距 + 实测高度 + 统一视觉间距。列表贴底留白与箭头
@@ -1028,7 +1032,7 @@ private fun HomePageContentBody(
                 pendingFiles = pendingFiles,
                 onAttachImageClick = { attachSheetVisible = true },
                 voiceMode = uiState.voiceMode,
-                onToggleVoiceMode = { latestViewModel.sendIntent(HomeChatIntent.ToggleVoiceMode) },
+                onToggleVoiceMode = onToggleVoiceMode,
                 backdrop = chatBackdrop,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
