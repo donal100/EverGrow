@@ -10,6 +10,10 @@ import androidx.compose.material.icons.filled.Mic
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.platform.LocalContext
 import com.niki914.zafiro.app.audio.VoiceRecorder
+import com.niki914.zafiro.app.audio.QwenAsrClient
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
+import java.io.File
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.LocalIndication
 import com.kyant.backdrop.Backdrop
@@ -510,10 +514,13 @@ fun LiquidChatComposer(
     // contextProgress 为 null（无记账）时不画环。
     val contentColor = MaterialTheme.colorScheme.primary
 
-    // 语音：本地状态即可，当前只落盘，不参与草稿/发送流程。
+    // 语音：录音 -> Qwen ASR 转写 -> 文本落进输入框（不自动发送，留给用户改）。
     val appContext = LocalContext.current.applicationContext
     val voiceRecorder = remember { VoiceRecorder(appContext) }
+    val asrClient = remember { QwenAsrClient(QwenAsrClient.keyFileFor(appContext)) }
+    val voiceScope = rememberCoroutineScope()
     var isRecording by remember { mutableStateOf(false) }
+    var isTranscribing by remember { mutableStateOf(false) }
     DisposableEffect(Unit) {
         onDispose { voiceRecorder.release() }
     }
@@ -531,20 +538,54 @@ fun LiquidChatComposer(
             Toast.makeText(appContext, "Microphone permission denied", Toast.LENGTH_SHORT).show()
         }
     }
-    fun toggleRecording() {
-        if (isRecording) {
-            val saved = voiceRecorder.stop()
-            isRecording = false
-            if (saved != null) {
-                val (file, ms) = saved
+    fun stopAndTranscribe() {
+        val saved = voiceRecorder.stop()
+        isRecording = false
+        if (saved == null) {
+            Toast.makeText(appContext, "Recording too short, discarded", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val (file, ms) = saved
+        if (!asrClient.hasKey()) {
+            Toast.makeText(
+                appContext,
+                "No ASR key. Recording kept at " + file.name,
+                Toast.LENGTH_LONG,
+            ).show()
+            return
+        }
+        isTranscribing = true
+        voiceScope.launch {
+            val result = asrClient.transcribe(file)
+            isTranscribing = false
+            result.onSuccess { text ->
+                if (text.isBlank()) {
+                    Toast.makeText(appContext, "No speech detected", Toast.LENGTH_SHORT).show()
+                } else {
+                    // 只在末尾追加，避免覆盖用户已经输入的草稿
+                    val merged = if (value.isBlank()) text else value.trimEnd() + " " + text
+                    onValueChange(merged)
+                    Toast.makeText(
+                        appContext,
+                        "Transcribed " + (ms / 1000.0) + "s of audio",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                }
+            }.onFailure { err ->
+                // 录音文件保留在 recordings/，可直接重试
                 Toast.makeText(
                     appContext,
-                    "Saved " + file.name + " (" + (ms / 1000.0) + "s)",
+                    "Transcription failed: " + (err.message ?: "unknown"),
                     Toast.LENGTH_LONG,
                 ).show()
-            } else {
-                Toast.makeText(appContext, "Recording too short, discarded", Toast.LENGTH_SHORT).show()
             }
+        }
+    }
+
+    fun toggleRecording() {
+        if (isTranscribing) return
+        if (isRecording) {
+            stopAndTranscribe()
             return
         }
         val granted =
@@ -631,16 +672,29 @@ fun LiquidChatComposer(
     @Composable
     fun speakButton() {
         // 录音中把图标染成 error 色：没有这个反馈，用户无法判断是否正在采集。
-        val tint = if (isRecording) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+        val tint = when {
+            isRecording -> MaterialTheme.colorScheme.error
+            isTranscribing -> MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+            else -> MaterialTheme.colorScheme.primary
+        }
         CompositionLocalProvider(LocalContentColor provides tint) {
             ActionBarButton(
                 onClick = { toggleRecording() },
                 modifier = Modifier.offset(x = (-6).dp),
             ) {
-                Icon(
-                    imageVector = Icons.Default.Mic,
-                    contentDescription = if (isRecording) "Stop Recording Button" else "Speak Button",
-                )
+                if (isTranscribing) {
+                    LoadingIndicator(
+                        modifier = Modifier
+                            .size(24.dp)
+                            .clearAndSetSemantics { contentDescription = "Transcribing Button" },
+                        color = tint,
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.Default.Mic,
+                        contentDescription = if (isRecording) "Stop Recording Button" else "Speak Button",
+                    )
+                }
             }
         }
     }
