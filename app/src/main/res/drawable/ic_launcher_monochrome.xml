@@ -1,19 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="108dp"
-    android:height="108dp"
-    android:viewportWidth="108"
-    android:viewportHeight="108">
-    <!-- 主题图标（Android 13+）：单色剪影，形状与彩色版一致 -->
-    <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M74.8,31.4 L74.0,29.3 L72.6,27.5 L71.1,25.9 L69.4,24.5 L67.6,23.2 L65.6,22.1 L63.6,21.2 L61.5,20.5 L59.3,20.0 L57.1,19.6 L54.9,19.4 L52.7,19.4 L50.4,19.6 L48.3,19.9 L46.1,20.5 L44.0,21.3 L42.0,22.2 L40.0,23.4 L38.2,24.8 L36.6,26.4 L35.1,28.2 L33.8,30.3 L32.8,32.5 L32.0,34.9 L31.6,37.5 L31.4,40.2 L31.6,42.7 L32.1,45.1 L33.0,47.4 L34.1,49.4 L35.5,51.3 L37.0,52.9 L38.7,54.4 L40.4,55.7 L42.3,56.8 L44.1,57.9 L46.0,58.8 L47.9,59.7 L49.8,60.6 L51.7,61.4 L53.5,62.1 L55.3,62.9 L56.9,63.6 L58.5,64.3 L59.9,65.0 L61.1,65.7 L62.2,66.4 L63.1,67.1 L63.7,67.7 L64.2,68.3 L64.5,68.9 L64.7,69.4 L64.9,69.8 L64.9,70.3 L64.9,70.7 L64.8,71.3 L64.5,71.9 L64.2,72.5 L63.7,73.2 L63.0,73.9 L62.2,74.6 L61.2,75.2 L60.2,75.8 L59.0,76.4 L57.7,76.9 L56.3,77.4 L54.8,77.7 L53.2,78.0 L51.6,78.2 L49.9,78.2 L48.1,78.2 L46.3,78.0 L44.5,77.7 L42.6,77.3 L40.4,77.1 L39.6,78.9 L41.3,80.4 L43.3,81.4 L45.3,82.3 L47.3,82.9 L49.4,83.4 L51.4,83.6 L53.5,83.8 L55.5,83.8 L57.4,83.6 L59.3,83.3 L61.2,82.9 L62.9,82.3 L64.6,81.6 L66.2,80.8 L67.7,79.8 L69.1,78.7 L70.3,77.5 L71.4,76.2 L72.3,74.6 L73.0,73.0 L73.4,71.2 L73.5,69.3 L73.2,67.4 L72.7,65.5 L71.8,63.7 L70.7,62.0 L69.3,60.5 L67.8,59.1 L66.1,58.0 L64.5,56.9 L62.7,56.0 L60.9,55.1 L59.1,54.2 L57.3,53.4 L55.4,52.6 L53.6,51.9 L51.9,51.1 L50.2,50.3 L48.6,49.5 L47.1,48.7 L45.7,47.8 L44.5,47.0 L43.5,46.1 L42.6,45.2 L41.9,44.3 L41.3,43.4 L40.9,42.4 L40.6,41.3 L40.4,40.0 L40.4,38.5 L40.7,36.9 L41.0,35.5 L41.5,34.2 L42.2,33.0 L42.9,31.8 L43.8,30.8 L44.8,29.9 L46.0,29.1 L47.3,28.3 L48.6,27.7 L50.1,27.1 L51.6,26.7 L53.3,26.4 L54.9,26.2 L56.6,26.2 L58.4,26.2 L60.1,26.4 L61.8,26.8 L63.5,27.2 L65.2,27.8 L66.9,28.5 L68.4,29.4 L70.0,30.4 L71.5,31.5 L73.2,32.6 Z" />
-    <path
-        android:pathData="M36,84 L71.9,32.2"
-        android:strokeColor="#FFFFFF"
-        android:strokeWidth="6"
-        android:strokeLineCap="round" />
-    <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M80.0,22.0 L77.8,39.4 L63.6,28.2 Z" />
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <!-- 主题图标：单色剪影 -->
+    <path android:pathData="M54.0,22.0 Q34.0,66.5 82.6,71.5" android:strokeColor="#FFFFFF" android:strokeWidth="7" android:strokeLineCap="round" />
+    <path android:pathData="M82.6,71.5 Q54.0,31.9 25.4,71.5" android:strokeColor="#FFFFFF" android:strokeWidth="7" android:strokeLineCap="round" />
+    <path android:pathData="M25.4,71.5 Q74.0,66.5 54.0,22.0" android:strokeColor="#FFFFFF" android:strokeWidth="7" android:strokeLineCap="round" />
 </vector>
