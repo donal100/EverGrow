@@ -364,13 +364,20 @@ fun HomePageContent(
         }
         if (!voiceSawGenerating) return@LaunchedEffect
         voiceSawGenerating = false
-        if (!uiState.voiceMode) return@LaunchedEffect
+        if (!uiState.voiceMode) {
+            voiceSpeaker.note("hook: generation ended but voiceMode is OFF")
+            return@LaunchedEffect
+        }
         val reply = uiState.turns.lastOrNull()
             ?.blocks
             ?.filterIsInstance<HomeChatBlock.Text>()
             ?.joinToString("\n") { it.text }
             ?.trim()
             .orEmpty()
+        voiceSpeaker.note(
+            "hook fired: voiceMode=" + uiState.voiceMode + " replyChars=" + reply.length +
+                " turns=" + uiState.turns.size
+        )
         if (reply.isNotEmpty()) {
             // 失败不打断 UI：VoiceReplySpeaker 内部已退回本机 TTS
             runCatching { voiceSpeaker.speak(reply) }
