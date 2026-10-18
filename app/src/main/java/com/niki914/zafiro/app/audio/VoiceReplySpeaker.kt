@@ -114,7 +114,7 @@ class VoiceReplySpeaker(private val appContext: Context) {
         val clean = SpeechOutput.toSpeakable(text)
         if (clean.isBlank()) return
         cancelled = false
-        log("submit chars=" + clean.length + " head=" + clean.take(40) + " queued=" + (pending.size() + 1))
+        log("submit chars=" + clean.length + " head=" + clean.take(40) + " queued=" + (pending.size + 1))
         pending.offer(clean)
         if (workerStarted.compareAndSet(false, true)) {
             workerScope.launch { workerLoop() }
