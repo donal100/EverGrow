@@ -142,6 +142,7 @@ import com.niki914.uikit.infra.scrollbar.rememberLiquidOverscrollController
 import com.niki914.zafiro.api.model.ApprovalDecision
 import com.niki914.zafiro.api.model.ApprovalRequest
 import com.niki914.zafiro.app.R
+import com.niki914.zafiro.app.audio.SpeechOutput
 import com.niki914.zafiro.app.conversation.TurnBranchState
 import com.niki914.zafiro.app.notification.TurnNotificationManager
 import com.niki914.zafiro.app.ui.PageChromeContribution
@@ -340,6 +341,30 @@ fun HomePageContent(
                 latestViewModel.sendIntent(HomeChatIntent.ClearUnread(id))
             }
         }
+    }
+
+    // —— 语音播报 ——
+    // 只在真的观察到「生成中→结束」之后才朗读，否则打开历史会话会把最后一条旧消息念一遍。
+    // 播的是 final 文本，不是流式中间态：边生成边念会在修订时反复改口。
+    val speechOutput = remember { SpeechOutput(LocalContext.current.applicationContext) }
+    var sawGenerating by remember { mutableStateOf(false) }
+    DisposableEffect(Unit) {
+        onDispose { speechOutput.release() }
+    }
+    LaunchedEffect(uiState.isGenerating, uiState.turns) {
+        if (uiState.isGenerating) {
+            sawGenerating = true
+            return@LaunchedEffect
+        }
+        if (!sawGenerating) return@LaunchedEffect
+        sawGenerating = false
+        val reply = uiState.turns.lastOrNull()
+            ?.blocks
+            ?.filterIsInstance<HomeChatBlock.Text>()
+            ?.joinToString("\n") { it.text }
+            ?.trim()
+            .orEmpty()
+        if (reply.isNotEmpty()) speechOutput.speak(reply)
     }
 
     LaunchedEffect(Unit) {
