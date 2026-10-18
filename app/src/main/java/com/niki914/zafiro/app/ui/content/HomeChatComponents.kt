@@ -7,6 +7,7 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.platform.LocalContext
 import com.niki914.zafiro.app.audio.VoiceRecorder
@@ -508,6 +509,8 @@ fun LiquidChatComposer(
     pendingImages: List<HomeChatImage> = emptyList(),
     pendingFiles: List<HomeChatFile> = emptyList(),
     onAttachImageClick: () -> Unit = {},
+    voiceMode: Boolean = false,
+    onToggleVoiceMode: () -> Unit = {},
     backdrop: Backdrop? = null,
 ) {
     // 发送按钮恒亮：无文本点击时触发 Toast 提示，能不能点不靠颜色表达。
@@ -681,6 +684,24 @@ fun LiquidChatComposer(
     }
 
     @Composable
+    fun voiceToggleButton() {
+        // 语音模式：开着时回答会被念出来。用 VolumeUp 的实心/描边差别做状态提示，
+        // 并额外用主色高亮——只靠图标形状在 48dp 下不够明显。
+        val tint = if (voiceMode) MaterialTheme.colorScheme.primary else LocalContentColor.current
+        CompositionLocalProvider(LocalContentColor provides tint) {
+            ActionBarButton(
+                onClick = onToggleVoiceMode,
+                modifier = Modifier.offset(x = (-4).dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Default.VolumeUp,
+                    contentDescription = if (voiceMode) "Voice Mode On Button" else "Voice Mode Off Button",
+                )
+            }
+        }
+    }
+
+    @Composable
     fun speakButton() {
         // 录音中把图标染成 error 色：没有这个反馈，用户无法判断是否正在采集。
         val tint = when {
@@ -726,6 +747,7 @@ fun LiquidChatComposer(
         expandedActionsRow = {
             attachButton()
             speakButton()
+            voiceToggleButton()
             sendButton()
         },
         backdrop = backdrop,
@@ -735,6 +757,7 @@ fun LiquidChatComposer(
         trailingContent = {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 speakButton()
+                voiceToggleButton()
                 sendButton()
             }
         },
