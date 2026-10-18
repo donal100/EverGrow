@@ -521,9 +521,19 @@ fun LiquidChatComposer(
     val voiceScope = rememberCoroutineScope()
     var isRecording by remember { mutableStateOf(false) }
     var isTranscribing by remember { mutableStateOf(false) }
+    var pendingSend by remember { mutableStateOf(false) }
     DisposableEffect(Unit) {
         onDispose { voiceRecorder.release() }
     }
+    // 转写完直接发：必须在 value 落到父级状态之后才触发 onSendClick，
+    // 否则发出去的会是上一轮的旧草稿。用 pendingSend 做闸门，等重组后再放行。
+    LaunchedEffect(pendingSend, value, isGenerating) {
+        if (pendingSend && !isGenerating && value.isNotBlank()) {
+            pendingSend = false
+            onSendClick()
+        }
+    }
+
     fun beginRecording() {
         isRecording = runCatching { voiceRecorder.start() }.isSuccess
         val hint = if (isRecording) "Recording… tap again to stop" else "Could not start recording"
@@ -565,9 +575,10 @@ fun LiquidChatComposer(
                     // 只在末尾追加，避免覆盖用户已经输入的草稿
                     val merged = if (value.isBlank()) text else value.trimEnd() + " " + text
                     onValueChange(merged)
+                    pendingSend = true
                     Toast.makeText(
                         appContext,
-                        "Transcribed " + (ms / 1000.0) + "s of audio",
+                        "Transcribed " + (ms / 1000.0) + "s - sending to DeepSeek",
                         Toast.LENGTH_SHORT,
                     ).show()
                 }
