@@ -192,6 +192,10 @@ object AccessibilityController {
         return ShellIdentity.NONE
     }
 
+    /** Non-suspending restricted-settings note; empty when not applicable. */
+    private fun restrictedGuidance(): String =
+        ContextProvider.awaitIfAvailable()?.let(RestrictedSettingsHint::guidance) ?: ""
+
     private fun resetShellSession() {
         shellSessionHandle = null
         shellIdentity = ShellIdentity.NONE
@@ -241,7 +245,7 @@ object AccessibilityController {
                     "Zafiro cannot fully control this device because required permissions were not granted. " +
                             "Failed: ${failures.joinToString("; ")}. " +
                             "Tell the user to open Settings, enable 'Zafiro' under Accessibility, " +
-                            "and allow 'Display over other apps'."
+                            "and allow 'Display over other apps'." + restrictedGuidance()
                 )
             )
         }
@@ -266,7 +270,8 @@ object AccessibilityController {
             return Result.failure(
                 RuntimeException(
                     "The Zafiro accessibility service is not available (${failures.joinToString("; ")}). " +
-                            "Tell the user to enable 'Zafiro' in Settings > Accessibility, then retry."
+                            "Tell the user to enable 'Zafiro' in Settings > Accessibility, then retry." +
+                            restrictedGuidance()
                 )
             )
         }
