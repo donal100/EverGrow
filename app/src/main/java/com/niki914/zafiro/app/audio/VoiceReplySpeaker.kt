@@ -79,7 +79,7 @@ class VoiceReplySpeaker(private val appContext: Context) {
                 JSONObject()
                     .put("text", text)
                     .put("voice", VOICE)
-                    .put("language_type", "Auto"),
+                    .put("language_type", languageFor(text)),
             )
             .toString()
 
@@ -109,6 +109,10 @@ class VoiceReplySpeaker(private val appContext: Context) {
             file.delete()
         }
     }
+
+    /** 显式指定正文脚本：Auto 会让英文套上中文音色的韵律，听起来发飘。 */
+    private fun languageFor(text: String): String =
+        if (text.any { it.code in 0x3400..0x4DBF || it.code in 0x4E00..0x9FFF }) "Chinese" else "English"
 
     private suspend fun playBlocking(file: File) {
         stop()
@@ -142,7 +146,7 @@ class VoiceReplySpeaker(private val appContext: Context) {
         private const val ENDPOINT =
             "https://maas.qwencloudapi.com/api/v1/services/aigc/multimodal-generation/generation"
         private const val MODEL = "qwen3-tts-flash"
-        private const val VOICE = "Cherry"
+        private const val VOICE = "Ethan"
         private const val KEY_FILE = "qwen_asr_key.txt"
         private val JSON = "application/json".toMediaType()
     }
