@@ -214,6 +214,9 @@ class CallModeController(
             )
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-US")
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
+            // 跑步时不能依赖信号：这台机器有 on-device 识别模型，优先用本地的。
+            // 代价是准确率略低，换来的是隧道里/山顶上也听得见。
+            putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
             // 端点检测：停顿 900ms 就当一句话说完（默认更长，通话模式要快）
             putExtra(

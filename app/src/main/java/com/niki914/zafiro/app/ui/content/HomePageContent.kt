@@ -200,6 +200,31 @@ private var voiceLatchText = ""
  * 进程重启会归零 —— 这是有意的，没人希望应用一启动就自己开麦。
  */
 private val listenModeState = mutableStateOf(false)
+
+/**
+ * 流式播报：边生成边念完整的句子，第一句不用等全文。
+ * 互斥锁保证「第一句」和「尾巴」不会同时占用播放器（Qwen 合成是并发的）。
+ */
+private val speakerMutex = kotlinx.coroutines.sync.Mutex()
+@Volatile private var streamingTurnId = -1L
+@Volatile private var speechCancelled = false
+
+/** 找一段文本里下一个句末位置（从 from 起算，太短的片段先攒着）。 */
+private fun sentenceEnd(text: String, from: Int): Int {
+    var i = from
+    while (i < text.length) {
+        val c = text[i]
+        if (c == '\n' && i - from >= 12) return i + 1
+        if ((c == '.' || c == '!' || c == '?' || c == '。' || c == '！' || c == '？') &&
+            i - from >= 12 &&
+            (i + 1 >= text.length || text[i + 1].isWhitespace())
+        ) {
+            return i + 1
+        }
+        i++
+    }
+    return from
+}
 private const val AUTO_FOCUS_MAX_ATTEMPTS = 20
 private const val AUTO_FOCUS_RETRY_INTERVAL_MILLIS = 150L
 
@@ -390,84 +415,88 @@ fun HomePageContent(
             pendingUtterance = text
         }
     }
-    var voiceSawGenerating by remember { mutableStateOf(false) }
     DisposableEffect(Unit) {
         onDispose {
             voiceScope.cancel()
             voiceSpeaker.release()
         }
     }
+    // —— 语音播报：边生成边念 ——
+    // 旧做法是等整段回答写完再开口，短回答也要等 4-5 秒。现在按句子切：一有完整句子
+    // 就送去合成并念，生成还在继续；最后再补那句尾巴。听的感受是「它开始回话了」，
+    // 而不是先干等。
     LaunchedEffect(uiState.isGenerating, uiState.voiceMode, uiState.turns.size) {
-        // 只在「生成中 → 结束」这一刻播报
-        if (uiState.isGenerating) {
-            voiceSawGenerating = true
-            return@LaunchedEffect
-        }
-        if (!voiceSawGenerating) return@LaunchedEffect
-        voiceSawGenerating = false
-        // 通话模式下必须有声音：用户戴耳机走路，不念就等于没答
+        if (!uiState.isGenerating) return@LaunchedEffect
         if (!uiState.voiceMode && !latestListenMode) {
-            voiceSpeaker.note("hook: generation ended but voiceMode is OFF")
+            voiceSpeaker.note("stream: generation started but voice is off")
             return@LaunchedEffect
         }
+        val turnId = latestUiState.turns.lastOrNull()?.id ?: return@LaunchedEffect
+        // 一轮只播一次（工具调用会让 isGenerating 多次翻转）
+        if (turnId == voiceLatchTurnId || turnId == streamingTurnId) return@LaunchedEffect
+        streamingTurnId = turnId
+        speechCancelled = false
 
-        // 只认「最后一条消息」。旧实现用 asReversed().firstNotNullOfOrNull 找最近的非空正文，
-        // 最后一条没有文本时会一路回退到上一条旧回答 —— 旧内容因此被反复念出来。
-        fun lastTurnReply(): Pair<Long, String>? {
-            val turn = latestUiState.turns.lastOrNull() ?: return null
-            val text = turn.blocks
-                .filterIsInstance<HomeChatBlock.Text>()
-                .joinToString("\n") { it.text }
-                .trim()
-            return turn.id to text
-        }
+        fun turnText(): String = latestUiState.turns.lastOrNull()
+            ?.takeIf { it.id == turnId }
+            ?.blocks
+            ?.filterIsInstance<HomeChatBlock.Text>()
+            ?.joinToString("\n") { it.text }
+            ?.trim()
+            .orEmpty()
 
-        // 正文比 isGenerating 晚一步写进 blocks，而且是流式追加的：实测 isGenerating 已经
-        // 变 false 时 blocks 里只有半句（"…with e"），于是念到一半就停 —— 听感上像说到一半睡过去。
-        // 所以必须等正文「不再变长」一小段时间，而不是等到「非空」就开念。
-        var reply = lastTurnReply()?.second.orEmpty()
-        var turnId = lastTurnReply()?.first ?: -1L
-        var waited = 0
-        var stableFor = 0
-        while (waited < 8000) {
-            delay(150)
-            waited += 150
-            val snap = lastTurnReply()
-            val cur = snap?.second.orEmpty()
-            if (snap != null) turnId = snap.first
-            if (cur.isNotEmpty() && cur == reply) {
-                stableFor += 150
-                if (stableFor >= 600) break
-            } else {
-                stableFor = 0
-            }
-            reply = cur
-        }
-        voiceSpeaker.note(
-            "hook fired: waited=" + waited + "ms turn=" + turnId + " replyChars=" + reply.length
-        )
-        if (reply.isEmpty()) {
-            callModeController.resume()
-            return@LaunchedEffect
-        }
-        // 同一回合 + 同一段正文只念一次（isGenerating 在一轮工具调用里可能多次翻转）
-        if (turnId == voiceLatchTurnId && reply == voiceLatchText) {
-            voiceSpeaker.note("hook: skipped, already spoken")
-            callModeController.resume()
-            return@LaunchedEffect
-        }
-        voiceLatchTurnId = turnId
-        voiceLatchText = reply
         voiceScope.launch {
-            // 念话期间闭麦，念完再把话筒交还给通话模式。
-            // resume 放 finally：念话被取消（切页面、被打断）时也要把麦交回去，
-            // 否则通话模式就永远停在那儿——用户看到的就是「不听了」。
             callModeController.pause()
-            voiceSpeaker.stop()
-            callModeController.noteSpoken(reply)
+            var spoken = 0
+            var stableFor = 0
             try {
-                runCatching { voiceSpeaker.speak(reply) }
+                while (true) {
+                    if (speechCancelled) break
+                    val snapshot = latestUiState
+                    val text = turnText()
+                    val cut = sentenceEnd(text, spoken)
+                    if (cut > spoken) {
+                        val chunk = text.substring(spoken, cut).trim()
+                        spoken = cut
+                        stableFor = 0
+                        if (chunk.isNotEmpty()) {
+                            callModeController.noteSpoken(chunk)
+                            speakerMutex.lock()
+                            try {
+                                runCatching { voiceSpeaker.speak(chunk) }
+                            } finally {
+                                speakerMutex.unlock()
+                            }
+                        }
+                        continue
+                    }
+                    if (!snapshot.isGenerating && text.length <= spoken) {
+                        stableFor += 120
+                        if (stableFor >= 360) break
+                    }
+                    delay(120)
+                }
+
+                // 尾巴：不足一句的部分
+                if (!speechCancelled) {
+                    val text = turnText()
+                    if (text.length > spoken) {
+                        val rest = text.substring(spoken).trim()
+                        if (rest.isNotEmpty()) {
+                            callModeController.noteSpoken(rest)
+                            speakerMutex.lock()
+                            try {
+                                runCatching { voiceSpeaker.speak(rest) }
+                            } finally {
+                                speakerMutex.unlock()
+                            }
+                        }
+                    }
+                }
+                voiceLatchTurnId = turnId
+                voiceSpeaker.note("stream done: turn=" + turnId + " spokenChars=" + spoken)
             } finally {
+                streamingTurnId = -1L
                 if (latestListenMode) callModeController.resume()
             }
         }
@@ -724,6 +753,7 @@ fun HomePageContent(
         },
         onToggleVoiceMode = { viewModel.sendIntent(HomeChatIntent.ToggleVoiceMode) },
         onInterruptSpeech = {
+            speechCancelled = true
             voiceSpeaker.stop()
             if (listenMode) callModeController.resume()
         },
