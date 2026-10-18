@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- App / Module -->
-    <string name="app_name">Zafiro</string>
+    <string name="app_name">Evergrow</string>
     <string name="xposed_desc">Empower your voice assistant with your own models\n\nCurrently supported:\n\n- ColorOS Breeno\n- HyperOS XiaoAi</string>
 
     <!-- Onboarding -->
