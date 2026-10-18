@@ -134,6 +134,8 @@ data class HomeChatUiState(
     val pendingFiles: List<HomeChatFile> = emptyList(),
     val turns: List<HomeChatTurn> = emptyList(),
     val isGenerating: Boolean = false,
+    /** 语音模式：开着时回答会被念出来，并要求模型按「听」而不是「看」来组织内容。 */
+    val voiceMode: Boolean = false,
     val isLoadingConversation: Boolean = false,
     /** 内容发射版本，用于 Compose 贴底触发；不携带事件类型。 */
     val conversationVersion: Int = 0,
@@ -234,6 +236,8 @@ sealed interface HomeChatIntent {
 
     data class ToggleThinking(val turnId: Long, val blockIndex: Int) : HomeChatIntent
     data class ToggleActionRow(val turnId: Long, val source: ActionSource) : HomeChatIntent
+    data object ToggleVoiceMode : HomeChatIntent
+
     data class ReGenerateAt(val turnId: Long) : HomeChatIntent
 
     /** 翻页到指定 Turn 的相邻分支：-1 上一版、+1 下一版；超出范围忽略。 */
