@@ -76,6 +76,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -178,6 +182,13 @@ import java.io.File
  * （从设置页/历史页返回不打断用户）。仿 StartupPageContent.demoHasPlayed 的写法。
  */
 private var composerAutoFocusDone = false
+
+/**
+ * 已经念过的「回合 + 正文」。放在文件级而不是 remember{} 里：
+ * 退出 Home 再进来、或页面重建时，旧回答不该被重新念一遍。
+ */
+private var voiceLatchTurnId = -1L
+private var voiceLatchText = ""
 private const val AUTO_FOCUS_MAX_ATTEMPTS = 20
 private const val AUTO_FOCUS_RETRY_INTERVAL_MILLIS = 150L
 
@@ -353,12 +364,19 @@ fun HomePageContent(
     // LocalContext.current 是 @Composable 调用，不能写在 remember{} 的 lambda 里（这条我犯过两次）
     val voiceContext = LocalContext.current.applicationContext
     val voiceSpeaker = remember { VoiceReplySpeaker(voiceContext) }
+    // 播报不能挂在 composition 的 LaunchedEffect 上：效果随 key 重启，会把正在进行的
+    // 云端合成一起取消（日志里的 "The coroutine scope left the composition" 就是这个），
+    // 于是每次都被兜底的本机 TTS 抢着念 —— 听感上就是「一直重复」。给播报一条自己的命。
+    val voiceScope = remember { CoroutineScope(SupervisorJob() + Dispatchers.IO) }
     var voiceSawGenerating by remember { mutableStateOf(false) }
     DisposableEffect(Unit) {
-        onDispose { voiceSpeaker.release() }
+        onDispose {
+            voiceScope.cancel()
+            voiceSpeaker.release()
+        }
     }
-    LaunchedEffect(uiState.isGenerating, uiState.turns, uiState.voiceMode) {
-        // 只在「生成中 → 结束」这一刻播报（噪音日志已去掉：之前每来一个 token 就写一行）
+    LaunchedEffect(uiState.isGenerating, uiState.voiceMode, uiState.turns.size) {
+        // 只在「生成中 → 结束」这一刻播报
         if (uiState.isGenerating) {
             voiceSawGenerating = true
             return@LaunchedEffect
@@ -370,27 +388,40 @@ fun HomePageContent(
             return@LaunchedEffect
         }
 
-        // 回答正文可能比 isGenerating 晚一步写进 blocks。这里必须读 latestUiState（
-        // rememberUpdatedState）而不是本函数捕获的 uiState 快照 —— 之前用快照取到空串
-        // （日志 replyChars=0），于是永远没声音。
-        fun latestReply(): String = latestUiState.turns.asReversed().firstNotNullOfOrNull { turn ->
-            turn.blocks
+        // 只认「最后一条消息」。旧实现用 asReversed().firstNotNullOfOrNull 找最近的非空正文，
+        // 最后一条没有文本时会一路回退到上一条旧回答 —— 旧内容因此被反复念出来。
+        fun lastTurnReply(): Pair<Long, String>? {
+            val turn = latestUiState.turns.lastOrNull() ?: return null
+            val text = turn.blocks
                 .filterIsInstance<HomeChatBlock.Text>()
                 .joinToString("\n") { it.text }
                 .trim()
-                .takeIf { it.isNotEmpty() }
-        }.orEmpty()
+            return turn.id to text
+        }
 
-        var reply = latestReply()
+        // 正文可能比 isGenerating 晚一步写进 blocks，所以读 latestUiState 并短暂等待
+        var snap = lastTurnReply()
         var waited = 0
-        while (reply.isEmpty() && waited < 4000) {
+        while ((snap == null || snap.second.isEmpty()) && waited < 4000) {
             delay(150)
             waited += 150
-            reply = latestReply()
+            snap = lastTurnReply()
         }
-        voiceSpeaker.note("hook fired: waited=" + waited + "ms replyChars=" + reply.length)
-        if (reply.isNotEmpty()) {
-            // 失败不打断 UI：VoiceReplySpeaker 内部会退回本机 TTS
+        val turnId = snap?.first ?: -1L
+        val reply = snap?.second.orEmpty()
+        voiceSpeaker.note(
+            "hook fired: waited=" + waited + "ms turn=" + turnId + " replyChars=" + reply.length
+        )
+        if (reply.isEmpty()) return@LaunchedEffect
+        // 同一回合 + 同一段正文只念一次（isGenerating 在一轮工具调用里可能多次翻转）
+        if (turnId == voiceLatchTurnId && reply == voiceLatchText) {
+            voiceSpeaker.note("hook: skipped, already spoken")
+            return@LaunchedEffect
+        }
+        voiceLatchTurnId = turnId
+        voiceLatchText = reply
+        voiceScope.launch {
+            voiceSpeaker.stop()
             runCatching { voiceSpeaker.speak(reply) }
         }
     }
