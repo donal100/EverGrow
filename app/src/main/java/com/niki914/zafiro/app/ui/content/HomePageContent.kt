@@ -358,6 +358,11 @@ fun HomePageContent(
         onDispose { voiceSpeaker.release() }
     }
     LaunchedEffect(uiState.isGenerating, uiState.turns, uiState.voiceMode) {
+        // 无条件记录：先确认这个 effect 到底有没有跑起来
+        voiceSpeaker.note(
+            "effect run: generating=" + uiState.isGenerating + " voiceMode=" + uiState.voiceMode +
+                " turns=" + uiState.turns.size
+        )
         if (uiState.isGenerating) {
             voiceSawGenerating = true
             return@LaunchedEffect
