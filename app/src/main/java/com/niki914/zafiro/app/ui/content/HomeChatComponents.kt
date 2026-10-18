@@ -6,6 +6,8 @@ import android.content.pm.PackageManager
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.runtime.DisposableEffect
@@ -684,21 +686,33 @@ fun LiquidChatComposer(
     }
 
     @Composable
-    fun voiceToggleButton() {
-        // 语音模式：开着时回答会被念出来。用 VolumeUp 的实心/描边差别做状态提示，
-        // 并额外用主色高亮——只靠图标形状在 48dp 下不够明显。
-        // 红色 = 正在语音模式，和麦克风录音态同一套语义，一眼能分辨开关
-        val tint = if (voiceMode) MaterialTheme.colorScheme.error else LocalContentColor.current
-        CompositionLocalProvider(LocalContentColor provides tint) {
-            ActionBarButton(
-                onClick = onToggleVoiceMode,
-                modifier = Modifier.offset(x = (-4).dp),
-            ) {
-                Icon(
-                    imageVector = Icons.Default.VolumeUp,
-                    contentDescription = if (voiceMode) "Voice Mode On Button" else "Voice Mode Off Button",
-                )
-            }
+    fun speakPill() {
+        // 照 Grok 的做法：带文字的 Speak 开关。开着时实心高亮——
+        // 光看图标形状在 48dp 下分辨不出开关，配一个词才一眼看懂。
+        val on = voiceMode
+        val bg = if (on) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.surfaceVariant
+        val fg = if (on) MaterialTheme.colorScheme.onError else MaterialTheme.colorScheme.onSurfaceVariant
+        Row(
+            modifier = Modifier
+                .offset(x = (-4).dp)
+                .clip(CircleShape)
+                .background(bg)
+                .clickable(onClick = onToggleVoiceMode)
+                .padding(horizontal = 14.dp, vertical = 9.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Icon(
+                imageVector = Icons.Default.GraphicEq,
+                contentDescription = if (on) "Voice Mode On Button" else "Voice Mode Off Button",
+                tint = fg,
+                modifier = Modifier.size(18.dp),
+            )
+            Text(
+                text = "Speak",
+                color = fg,
+                style = MaterialTheme.typography.labelLarge,
+            )
         }
     }
 
@@ -748,7 +762,7 @@ fun LiquidChatComposer(
         expandedActionsRow = {
             attachButton()
             speakButton()
-            voiceToggleButton()
+            speakPill()
             sendButton()
         },
         backdrop = backdrop,
