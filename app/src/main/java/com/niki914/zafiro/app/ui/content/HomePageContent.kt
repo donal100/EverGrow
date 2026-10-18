@@ -358,11 +358,7 @@ fun HomePageContent(
         onDispose { voiceSpeaker.release() }
     }
     LaunchedEffect(uiState.isGenerating, uiState.turns, uiState.voiceMode) {
-        // 无条件记录：先确认这个 effect 到底有没有跑起来
-        voiceSpeaker.note(
-            "effect run: generating=" + uiState.isGenerating + " voiceMode=" + uiState.voiceMode +
-                " turns=" + uiState.turns.size
-        )
+        // 只在「生成中 → 结束」这一刻播报（噪音日志已去掉：之前每来一个 token 就写一行）
         if (uiState.isGenerating) {
             voiceSawGenerating = true
             return@LaunchedEffect
@@ -373,18 +369,28 @@ fun HomePageContent(
             voiceSpeaker.note("hook: generation ended but voiceMode is OFF")
             return@LaunchedEffect
         }
-        val reply = uiState.turns.lastOrNull()
-            ?.blocks
-            ?.filterIsInstance<HomeChatBlock.Text>()
-            ?.joinToString("\n") { it.text }
-            ?.trim()
-            .orEmpty()
-        voiceSpeaker.note(
-            "hook fired: voiceMode=" + uiState.voiceMode + " replyChars=" + reply.length +
-                " turns=" + uiState.turns.size
-        )
+
+        // 回答正文可能比 isGenerating 晚一步写进 blocks。这里必须读 latestUiState（
+        // rememberUpdatedState）而不是本函数捕获的 uiState 快照 —— 之前用快照取到空串
+        // （日志 replyChars=0），于是永远没声音。
+        fun latestReply(): String = latestUiState.turns.asReversed().firstNotNullOfOrNull { turn ->
+            turn.blocks
+                .filterIsInstance<HomeChatBlock.Text>()
+                .joinToString("\n") { it.text }
+                .trim()
+                .takeIf { it.isNotEmpty() }
+        }.orEmpty()
+
+        var reply = latestReply()
+        var waited = 0
+        while (reply.isEmpty() && waited < 4000) {
+            delay(150)
+            waited += 150
+            reply = latestReply()
+        }
+        voiceSpeaker.note("hook fired: waited=" + waited + "ms replyChars=" + reply.length)
         if (reply.isNotEmpty()) {
-            // 失败不打断 UI：VoiceReplySpeaker 内部已退回本机 TTS
+            // 失败不打断 UI：VoiceReplySpeaker 内部会退回本机 TTS
             runCatching { voiceSpeaker.speak(reply) }
         }
     }
