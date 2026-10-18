@@ -1,0 +1,196 @@
+package com.niki914.zafiro.app.audio
+
+import android.content.Context
+import android.content.Intent
+import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
+import java.io.File
+
+/**
+ * 通话模式（Listen mode）：像电话一样一直听着。
+ *
+ * 职责只到「听懂一句话」为止 —— 转写出来的文本交给调用方（发消息），
+ * 播放回复仍是 [VoiceReplySpeaker] 的事。这样两条链路各自可替换，
+ * 也不会出现「听」和「说」互相抢麦克风。
+ *
+ * 用系统 [SpeechRecognizer] 而不是自己开 AudioRecord + Qwen ASR：
+ * 它自带端点检测（说完自动结束），这正是通话模式要的东西；自己写 VAD
+ * 还得处理回声和设备差异。设备上的识别服务是 Google 的，可用。
+ *
+ * 回声处理：念回复时 pause()，念完 resume()。戴耳机时本来就没这问题，
+ * 但外放时不停麦会把 agent 自己的声音当成用户输入。
+ */
+class CallModeController(
+    private val context: Context,
+    private val onUtterance: (String) -> Unit,
+) {
+
+    private val main = Handler(Looper.getMainLooper())
+    private var recognizer: SpeechRecognizer? = null
+
+    /** 用户按开关打开时为 true；关掉后所有回调都变成空操作。 */
+    private var active = false
+
+    /** 自己念话（或等回复）时为 true：不收音，避免把自己的声音吃回去。 */
+    private var paused = false
+    private var lastUtterance = ""
+    private var lastSpokenPrefix = ""
+
+    /** 交出去之后等这么久还没人 resume() 就自己接上，避免卡死在「已暂停」。 */
+    private val watchdog = Runnable { resume() }
+
+    private val restart = Runnable { startListening() }
+
+    private val listener = object : RecognitionListener {
+        override fun onReadyForSpeech(params: Bundle?) = log("ready")
+        override fun onBeginningOfSpeech() = log("speech start")
+        override fun onRmsChanged(rmsdB: Float) = Unit
+        override fun onBufferReceived(buffer: ByteArray?) = Unit
+        override fun onEndOfSpeech() = log("speech end")
+
+        override fun onPartialResults(partialResults: Bundle?) {
+            // 只看最终结果：中间态会让 agent 收到半句话
+        }
+
+        override fun onEvent(eventType: Int, params: Bundle?) = Unit
+
+        override fun onError(error: Int) {
+            log("error=" + error)
+            // 6/7（no match / speech timeout）是正常的「静默」结果，直接重开
+            schedule(POST_ERROR_RESTART_MS)
+        }
+
+        override fun onResults(results: Bundle?) {
+            val text = results
+                ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                ?.firstOrNull()
+                ?.trim()
+                .orEmpty()
+            log("results=" + text.length + " chars: " + text.take(60))
+            if (!active) return
+            if (text.length < 2) {
+                schedule(POST_ERROR_RESTART_MS)
+                return
+            }
+            // 念话的尾巴可能被识别成文本：与刚说过的话开头相同就直接丢掉
+            if (lastSpokenPrefix.isNotEmpty() &&
+                text.length > 8 &&
+                lastSpokenPrefix.startsWith(text.take(8), ignoreCase = true)
+            ) {
+                log("dropped echo-like transcript")
+                schedule(POST_ERROR_RESTART_MS)
+                return
+            }
+            if (text == lastUtterance) {
+                schedule(POST_ERROR_RESTART_MS)
+                return
+            }
+            lastUtterance = text
+            pause()
+            main.removeCallbacks(watchdog)
+            main.postDelayed(watchdog, WATCHDOG_MS)
+            onUtterance(text)
+        }
+    }
+
+    fun start() {
+        if (active) return
+        active = true
+        paused = false
+        lastUtterance = ""
+        main.post {
+            if (recognizer == null) {
+                recognizer = SpeechRecognizer.createSpeechRecognizer(context).also {
+                    it.setRecognitionListener(listener)
+                }
+            }
+            log("start")
+            startListening()
+        }
+    }
+
+    fun stop() {
+        active = false
+        paused = false
+        main.removeCallbacks(restart)
+        main.removeCallbacks(watchdog)
+        main.post {
+            runCatching { recognizer?.cancel() }
+            runCatching { recognizer?.destroy() }
+            recognizer = null
+            log("stop")
+        }
+    }
+
+    fun pause() {
+        if (!active || paused) return
+        paused = true
+        main.removeCallbacks(restart)
+        main.post { runCatching { recognizer?.cancel() } }
+        log("pause")
+    }
+
+    fun resume() {
+        if (!active) return
+        paused = false
+        main.removeCallbacks(watchdog)
+        main.removeCallbacks(restart)
+        // 稍等再开麦：TTS 的尾音还没散干净就收音会把结尾吃回去
+        main.postDelayed(restart, RESUME_DELAY_MS)
+        log("resume")
+    }
+
+    /** 让回声过滤器知道 agent 刚说过什么。 */
+    fun noteSpoken(text: String) {
+        lastSpokenPrefix = text.trim()
+    }
+
+    fun release() = stop()
+
+    private fun schedule(delayMs: Long) {
+        main.removeCallbacks(restart)
+        main.postDelayed(restart, delayMs)
+    }
+
+    private fun startListening() {
+        if (!active || paused) return
+        val r = recognizer ?: return
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(
+                RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                RecognizerIntent.LANGUAGE_MODEL_FREE_FORM,
+            )
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-US")
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+            // 端点检测：停顿 900ms 就当一句话说完（默认更长，通话模式要快）
+            putExtra(
+                RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS,
+                COMPLETE_SILENCE_MS,
+            )
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS,
+                POSSIBLY_COMPLETE_SILENCE_MS)
+        }
+        runCatching { r.startListening(intent) }
+            .onFailure { log("startListening failed: " + it.message) }
+    }
+
+    private fun log(msg: String) {
+        runCatching {
+            File(context.filesDir, "call_mode.log")
+                .appendText(System.currentTimeMillis().toString() + "  " + msg + "\n")
+        }
+    }
+
+    private companion object {
+        const val POST_ERROR_RESTART_MS = 350L
+        const val RESUME_DELAY_MS = 450L
+        const val WATCHDOG_MS = 90_000L
+        const val COMPLETE_SILENCE_MS = 900L
+        const val POSSIBLY_COMPLETE_SILENCE_MS = 600L
+    }
+}

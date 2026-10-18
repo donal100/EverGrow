@@ -167,6 +167,7 @@ import com.niki914.zafiro.app.ui.model.home.HomeChatUiState
 import com.niki914.zafiro.app.ui.model.home.HomeChatViewModel
 import com.niki914.zafiro.app.ui.model.home.HomeToolState
 import com.niki914.zafiro.app.ui.model.home.HomeToolStatus
+import com.niki914.zafiro.app.audio.CallModeController
 import com.niki914.zafiro.app.audio.VoiceReplySpeaker
 import com.niki914.zafiro.app.ui.model.home.MessageActionsDisplay
 import com.niki914.zafiro.app.ui.nav.TopBarActionSpec
@@ -371,6 +372,17 @@ fun HomePageContent(
     // 云端合成一起取消（日志里的 "The coroutine scope left the composition" 就是这个），
     // 于是每次都被兜底的本机 TTS 抢着念 —— 听感上就是「一直重复」。给播报一条自己的命。
     val voiceScope = remember { CoroutineScope(SupervisorJob() + Dispatchers.IO) }
+    // —— 通话模式（Listen mode）：像打电话一样一直听着 ——
+    // 用户说完一句 -> 走正常发消息链路 -> agent 回复 -> 念出来 -> 继续听。
+    var listenMode by remember { mutableStateOf(false) }
+    var pendingUtterance by remember { mutableStateOf<String?>(null) }
+    val latestListenMode by rememberUpdatedState(listenMode)
+    val callModeController = remember {
+        CallModeController(voiceContext) { text ->
+            latestViewModel.sendIntent(HomeChatIntent.InputChanged(text))
+            pendingUtterance = text
+        }
+    }
     var voiceSawGenerating by remember { mutableStateOf(false) }
     DisposableEffect(Unit) {
         onDispose {
@@ -386,7 +398,8 @@ fun HomePageContent(
         }
         if (!voiceSawGenerating) return@LaunchedEffect
         voiceSawGenerating = false
-        if (!uiState.voiceMode) {
+        // 通话模式下必须有声音：用户戴耳机走路，不念就等于没答
+        if (!uiState.voiceMode && !latestListenMode) {
             voiceSpeaker.note("hook: generation ended but voiceMode is OFF")
             return@LaunchedEffect
         }
@@ -426,17 +439,25 @@ fun HomePageContent(
         voiceSpeaker.note(
             "hook fired: waited=" + waited + "ms turn=" + turnId + " replyChars=" + reply.length
         )
-        if (reply.isEmpty()) return@LaunchedEffect
+        if (reply.isEmpty()) {
+            callModeController.resume()
+            return@LaunchedEffect
+        }
         // 同一回合 + 同一段正文只念一次（isGenerating 在一轮工具调用里可能多次翻转）
         if (turnId == voiceLatchTurnId && reply == voiceLatchText) {
             voiceSpeaker.note("hook: skipped, already spoken")
+            callModeController.resume()
             return@LaunchedEffect
         }
         voiceLatchTurnId = turnId
         voiceLatchText = reply
         voiceScope.launch {
+            // 念话期间闭麦，念完再把话筒交还给通话模式
+            callModeController.pause()
             voiceSpeaker.stop()
+            callModeController.noteSpoken(reply)
             runCatching { voiceSpeaker.speak(reply) }
+            if (latestListenMode) callModeController.resume()
         }
     }
 
@@ -458,6 +479,23 @@ fun HomePageContent(
             if (granted) "Location access granted" else "Location access denied",
             Toast.LENGTH_SHORT,
         ).show()
+    }
+
+    // 转写文本要等它真的落进输入框状态再 Send，否则发出去的是上一轮草稿
+    LaunchedEffect(pendingUtterance, uiState.input, uiState.isGenerating) {
+        val utterance = pendingUtterance ?: return@LaunchedEffect
+        if (uiState.isGenerating) return@LaunchedEffect
+        if (uiState.input.trim() == utterance.trim()) {
+            pendingUtterance = null
+            latestViewModel.sendIntent(HomeChatIntent.Send)
+        }
+    }
+    DisposableEffect(Unit) {
+        onDispose { callModeController.release() }
+    }
+    // 生成期间闭麦：省电，也避免把自己的念话/环境声当输入
+    LaunchedEffect(uiState.isGenerating) {
+        if (uiState.isGenerating) callModeController.pause()
     }
 
     LaunchedEffect(Unit) {
@@ -536,6 +574,40 @@ fun HomePageContent(
                             latestViewModel.sendIntent(HomeChatIntent.DismissConfigMenu)
                         }
                         latestViewModel.sendIntent(HomeChatIntent.ToggleVoiceMode)
+                    },
+                ),
+                PageChromeMenuItem(
+                    key = "listen_mode",
+                    title = if (listenMode) "Listen mode: on" else "Listen mode: off",
+                    onClick = {
+                        if (latestUiState.isConfigMenuVisible) {
+                            latestViewModel.sendIntent(HomeChatIntent.DismissConfigMenu)
+                        }
+                        val next = !listenMode
+                        listenMode = next
+                        if (next) {
+                            val granted = locationContext.checkSelfPermission(
+                                Manifest.permission.RECORD_AUDIO,
+                            ) == PackageManager.PERMISSION_GRANTED
+                            if (!granted) {
+                                listenMode = false
+                                Toast.makeText(
+                                    locationContext,
+                                    "Microphone permission needed",
+                                    Toast.LENGTH_SHORT,
+                                ).show()
+                            } else {
+                                callModeController.start()
+                                Toast.makeText(
+                                    locationContext,
+                                    "Listening - ask away",
+                                    Toast.LENGTH_SHORT,
+                                ).show()
+                            }
+                        } else {
+                            callModeController.stop()
+                            Toast.makeText(locationContext, "Listen mode off", Toast.LENGTH_SHORT).show()
+                        }
                     },
                 ),
                 PageChromeMenuItem(
