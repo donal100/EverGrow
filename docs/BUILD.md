@@ -15,8 +15,31 @@
 Order matters: **assemble → upload APK → unit tests.** Tests take ~8 min and used to gate the
 artifact; upload first so the APK is available ~2-3 min in.
 
-Debug keystore is cached (`debug-keystore-v1`). Without that, each run generates a new key and
-builds cannot update one another (signature mismatch).
+## Signing identity — never let this drift
+
+Debug builds sign with **`ci/debug.keystore`, committed to the repo**, wired explicitly in
+`app/build.gradle.kts`:
+
+```kotlin
+create("forkDebug") {
+    storeFile = rootProject.file("ci/debug.keystore")
+    storePassword = "android"; keyAlias = "androiddebugkey"; keyPassword = "android"
+}
+```
+
+and `debug { signingConfig = signingConfigs.getByName("forkDebug") }`.
+
+Two approaches that **do not work**, both tried and both failed with
+"App not installed as package conflicts with an existing package":
+
+- `actions/cache` for `~/.android/debug.keystore` — caches evict, and a miss silently
+  generates a new key.
+- Relying on AGP's implicit debug signing via a copied `~/.android/debug.keystore` —
+  three consecutive builds produced three different certificates.
+
+Verify before shipping an update: compare `sha256` of the signer certificate of the new APK
+with the installed one. Equal → in-place update. Different → Android will refuse, and only an
+uninstall fixes it (losing app data and permission grants).
 
 ## Getting the APK onto the phone
 
