@@ -17,6 +17,10 @@
     <!-- 定位：给 agent 的 py_gps 工具读取原始 GPS 数据（经纬度/精度/高度/速度/航向） -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <!-- 跑步记录：前台定位服务的类型权限，以及锁屏后继续定位的后台权限 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <uses-feature
         android:name="android.hardware.microphone"
@@ -153,5 +157,12 @@
                 <action android:name="com.niki914.zafiro.runtime.BIND" />
             </intent-filter>
         </service>
+
+        <!-- 跑步记录：只有 declared location 类型的前台服务能在锁屏后继续收定位点 -->
+        <service
+            android:name="com.niki914.zafiro.app.location.RunTrackingService"
+            android:exported="false"
+            android:foregroundServiceType="location" />
+
     </application>
 </manifest>
