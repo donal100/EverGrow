@@ -50,6 +50,12 @@ class CallModeController(
     /** 连续失败次数，用来退避；成功出结果就清零。 */
     private var errorStreak = 0
 
+    /**
+     * 重新开麦后的静默窗口。TTS 尾音还在空气里/还在耳机漏音时，
+     * 识别器会先收到一段残缺的「自己」，这种结果不该当成用户说话。
+     */
+    private var ignoreUntilMs = 0L
+
     /** 交出去之后等这么久还没人 resume() 就自己接上，避免卡死在「已暂停」。 */
     private val watchdog = Runnable { resume() }
 
@@ -90,16 +96,20 @@ class CallModeController(
                 .orEmpty()
             log("results=" + text.length + " chars: " + text.take(60))
             if (!active) return
+            if (System.currentTimeMillis() < ignoreUntilMs) {
+                log("dropped transcript inside the post-speech grace window")
+                schedule(POST_ERROR_RESTART_MS)
+                return
+            }
             if (text.length < 2) {
                 schedule(POST_ERROR_RESTART_MS)
                 return
             }
-            // 念话的尾巴可能被识别成文本：与刚说过的话开头相同就直接丢掉
-            if (lastSpokenPrefix.isNotEmpty() &&
-                text.length > 8 &&
-                lastSpokenPrefix.startsWith(text.take(8), ignoreCase = true)
-            ) {
-                log("dropped echo-like transcript")
+            // 回声：麦克风会把自己刚念的内容听回来。只比开头 8 个字不够 ——
+            // 实测把「That's the first time the loop has behaved…」整句收了进来。
+            // 改成词集合重合度：超过一半的词一样，就当回声丢掉。
+            if (lastSpokenPrefix.isNotEmpty() && looksLikeEcho(text, lastSpokenPrefix)) {
+                log("dropped echo-like transcript: " + text.take(60))
                 schedule(POST_ERROR_RESTART_MS)
                 return
             }
@@ -158,6 +168,7 @@ class CallModeController(
         if (!active) return
         paused = false
         listening = false
+        ignoreUntilMs = System.currentTimeMillis() + GRACE_MS
         main.removeCallbacks(watchdog)
         main.removeCallbacks(restart)
         // 稍等再开麦：TTS 的尾音还没散干净就收音会把结尾吃回去
@@ -171,6 +182,21 @@ class CallModeController(
     }
 
     fun release() = stop()
+
+    /** 判断一段转写是不是把我们自己刚念的话听回来了。 */
+    private fun looksLikeEcho(heard: String, spoken: String): Boolean {
+        fun words(s: String) = s.lowercase()
+            .replace(Regex("[^a-z0-9 ]"), " ")
+            .split(" ")
+            .filter { it.length > 2 }
+            .toSet()
+
+        val h = words(heard)
+        val s = words(spoken)
+        if (h.isEmpty() || s.isEmpty()) return false
+        val overlap = h.count { s.contains(it) }.toFloat() / h.size
+        return overlap >= 0.5f
+    }
 
     private fun schedule(delayMs: Long) {
         main.removeCallbacks(restart)
@@ -210,7 +236,8 @@ class CallModeController(
 
     private companion object {
         const val POST_ERROR_RESTART_MS = 350L
-        const val RESUME_DELAY_MS = 450L
+        const val RESUME_DELAY_MS = 900L
+        const val GRACE_MS = 1_500L
         const val WATCHDOG_MS = 25_000L
         const val COMPLETE_SILENCE_MS = 900L
         const val POSSIBLY_COMPLETE_SILENCE_MS = 600L
