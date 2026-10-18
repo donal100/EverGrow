@@ -55,6 +55,9 @@ class VoiceReplySpeaker(private val appContext: Context) {
         )
     }
 
+    /** 供 UI 层记录「钩子是否触发」，与 speak() 写同一个文件。 */
+    fun note(msg: String) = log(msg)
+
     /** 诊断用：这台设备拿不到 logcat，落盘一个增量日志。 */
     private fun log(msg: String) {
         runCatching {
