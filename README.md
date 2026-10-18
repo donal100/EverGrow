@@ -20,7 +20,7 @@
 </div>
 
 <p align="center">
-  <img src="https://socialify.git.ci/donal100/Evergrow/image?custom_description=Voice-first+Android+agent+%C2%B7+Speak%2C+listen%2C+act%0ASkills+%C2%B7+MCP+%C2%B7+Python+%2F+Phone-Use&description=1&font=Raleway&language=1&name=1&owner=1&pattern=Diagonal+Stripes&theme=Auto" alt="evergrow"/>
+  <img src="https://socialify.git.ci/donal100/Evergrow/image?custom_description=Voice-first+Android+agent+%C2%B7+Speak%2C+listen%2C+act%0ASkills+%C2%B7+MCP+%C2%B7+Python+%2F+Phone-Use&description=1&font=Raleway&language=1&logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDggMTA4IiB3aWR0aD0iNTEyIiBoZWlnaHQ9IjUxMiI%2BPHJlY3QgeD0iMCIgeT0iMCIgd2lkdGg9IjEwOCIgaGVpZ2h0PSIxMDgiIGZpbGw9IiMwQjFCMkIiLz48cGF0aCBkPSJNNTQuMCwyMi4wIFEzNC4wLDY2LjUgODIuNiw3MS41IiBzdHJva2U9IiMyRTdERkYiIHN0cm9rZS13aWR0aD0iNyIgZmlsbD0ibm9uZSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIi8%2BPHBhdGggZD0iTTgyLjYsNzEuNSBRNTQuMCwzMS45IDI1LjQsNzEuNSIgc3Ryb2tlPSIjMkVEM0M2IiBzdHJva2Utd2lkdGg9IjciIGZpbGw9Im5vbmUiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIvPjxwYXRoIGQ9Ik0yNS40LDcxLjUgUTc0LjAsNjYuNSA1NC4wLDIyLjAiIHN0cm9rZT0iI0RDRTdGNSIgc3Ryb2tlLXdpZHRoPSI3IiBmaWxsPSJub25lIiBzdHJva2UtbGluZWNhcD0icm91bmQiLz48L3N2Zz4%3D&name=1&owner=1&pattern=Diagonal+Stripes&theme=Auto" alt="evergrow"/>
 </p>
 
 <p align="center">
