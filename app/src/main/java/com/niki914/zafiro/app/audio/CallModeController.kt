@@ -56,13 +56,6 @@ class CallModeController(
      */
     private var ignoreUntilMs = 0L
 
-    /**
-     * 是否优先用本机识别模型。这台机器上 en-US 的离线模型并没有装，
-     * 强制 offline 会直接 return ERROR_LANGUAGE_UNAVAILABLE(13) —— 一次都听不到。
-     * 所以先试离线，遇到 12/13 就永久回落到在线识别，不再反复撞墙。
-     */
-    private var preferOffline = true
-
     /** 同一路麦克风的备份录音：只有用户说「你听错了」时才需要它。 */
     private val recorder = UtteranceRecorder(context.filesDir)
 
@@ -95,12 +88,9 @@ class CallModeController(
             listening = false
             log("error=" + error)
             // 12 = LANGUAGE_NOT_SUPPORTED，13 = LANGUAGE_UNAVAILABLE：
-            // 离线模型没装，立刻改走在线识别，否则会一直循环失败
-            if (preferOffline && (error == 12 || error == 13)) {
-                preferOffline = false
-                log("offline model unavailable -> switching to the network recogniser")
-                schedule(150L)
-                return
+            // 这台机器没装离线模型，见到就当配置问题记一笔，不要死循环
+            if (error == 12 || error == 13) {
+                log("language unavailable for the recogniser - check the language setting")
             }
             // 6/7（no match / speech timeout）是正常的「静默」结果；5 是客户端状态没准备好。
             // 都退避重开，连续失败就拉长间隔，避免把识别器打成 error=5 风暴。
@@ -243,8 +233,6 @@ class CallModeController(
             )
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-US")
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
-            // 有离线模型就用离线的（跑步时不在乎信号）；没有就等 onError 回落
-            putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, preferOffline)
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
             // 端点检测：停顿 900ms 就当一句话说完（默认更长，通话模式要快）
             putExtra(
