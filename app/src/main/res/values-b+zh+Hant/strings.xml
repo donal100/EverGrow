@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- App / Module -->
-    <string name="app_name">Zafiro</string>
+    <string name="app_name">Evergrow</string>
     <string name="xposed_desc">讓語音助理接入你自己的模型能力\n\n現已支援：\n\n- ColorOS 小布助手\n- HyperOS 小愛同學</string>
 
     <!-- Onboarding -->
