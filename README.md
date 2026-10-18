@@ -1,11 +1,14 @@
-> **Evergrow** is a fork of [Zafiro](https://github.com/niki914/zafiro) by [niki914](https://github.com/niki914),
-> used under the MIT licence. The architecture, agent runtime and tool design are his work — this fork exists to
-> carry a small set of fixes. Upstream credit and the original `LICENSE` are retained unchanged.
+> **Evergrow** is a personal fork of [Zafiro](https://github.com/niki914/zafiro) by [niki914](https://github.com/niki914),
+> used under the MIT licence. The architecture, agent runtime and tool design are his work. Upstream credit and the
+> original `LICENSE` are retained unchanged.
 >
-> Fork additions:
-> - CI baseline build (`.github/workflows/build.yml`)
-> - `INJECT_EVENTS_MISSING` capability preflight for coordinate input
-> - guided onboarding for Android 13+ restricted settings
+> What this fork adds on top of upstream:
+> - **Voice in** — record with one tap, transcribe with Qwen ASR (`qwen3-asr-flash`) and send automatically
+> - **Voice out** — replies spoken through Qwen TTS (`qwen3-tts-flash`, Ethan voice) with on-device TTS as fallback
+> - **Listen mode** — continuous, phone-call-style conversation for walking or running with earphones
+> - **Raw GPS for the agent** — `py_gps` exposes position, accuracy, altitude, speed, bearing and satellites
+> - **News briefing skill** — Hong Kong, technology, geopolitics and Premier League, routed by language
+> - **CI baseline build** + `INJECT_EVENTS_MISSING` capability preflight + guided Android 13+ onboarding
 >
 > **Build requirements** (undocumented upstream, found the hard way): JDK 17 **and Python 3.11** —
 > Chaquopy's `installDebugPythonRequirements` task fails without a `python3.11` on PATH.
@@ -17,19 +20,30 @@
 </div>
 
 <p align="center">
-  <img src="https://socialify.git.ci/niki914/zafiro/image?custom_description=Android+%C2%B7+Native+Agent+%C2%B7+Skills+%C2%B7+MCP%0APython+%2F+Phone-Use+%2F+Shell&description=1&font=Raleway&language=1&logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjE4IDE4IDcyIDcyIiB3aWR0aD0iNTEyIiBoZWlnaHQ9IjUxMiI%2BCiAgPCEtLSDog4zmma%2FvvJrlrp3nn7Pok50gLS0%2BCiAgPHJlY3QgeD0iMCIgeT0iMCIgd2lkdGg9IjEwOCIgaGVpZ2h0PSIxMDgiIGZpbGw9IiMwRjUyQkEiLz4KCiAgPGcgc3Ryb2tlPSIjRkZGRkZGIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiIGZpbGw9Im5vbmUiPgogICAgPCEtLSDlt6bkvqflpJbova7lu5Pnur8gLS0%2BCiAgICA8cGF0aCBkPSJNNTQsMzQgTDQ0LDUyLjMgQzQ1LjQsNTMuNyA0NS40LDU1LjMgNDQsNTYuNyBMNTQsNzQiIHN0cm9rZS13aWR0aD0iMiIvPgogICAgPCEtLSDlt6bkvqflhoXmo7Hnur8gLS0%2BCiAgICA8cGF0aCBkPSJNNTQsMzQgTDQ5LDUyLjMgQzQ5LjQsNTMuNyA0OS40LDU1LjMgNDksNTYuNyBMNTQsNzQiIHN0cm9rZS13aWR0aD0iMS41Ii8%2BCiAgICA8IS0tIOWPs%2BS%2Bp%2BWGheajsee6vyAtLT4KICAgIDxwYXRoIGQ9Ik01NCwzNCBMNTksNTIuMyBDNTguNiw1My43IDU4LjYsNTUuMyA1OSw1Ni43IEw1NCw3NCIgc3Ryb2tlLXdpZHRoPSIxLjUiLz4KICAgIDwhLS0g5Y%2Bz5L6n5aSW6L2u5buT57q%2FIC0tPgogICAgPHBhdGggZD0iTTU0LDM0IEw2NCw1Mi4zIEM2Mi42LDUzLjcgNjIuNiw1NS4zIDY0LDU2LjcgTDU0LDc0IiBzdHJva2Utd2lkdGg9IjIiLz4KICAgIDwhLS0g5Ye56Zm35bGC5LiK5LiL55WM6Z2i55qE5rC05bmz5qiq57q%2FIC0tPgogICAgPHBhdGggZD0iTTQ0LDUyLjMgTDY0LDUyLjMiIHN0cm9rZS13aWR0aD0iMS41Ii8%2BCiAgICA8cGF0aCBkPSJNNDQsNTYuNyBMNjQsNTYuNyIgc3Ryb2tlLXdpZHRoPSIxLjUiLz4KICA8L2c%2BCjwvc3ZnPgo%3D&name=1&owner=1&pattern=Diagonal+Stripes&theme=Auto" alt="zafiro"/>
+  <img src="https://socialify.git.ci/donal100/Evergrow/image?custom_description=Voice-first+Android+agent+%C2%B7+Speak%2C+listen%2C+act%0ASkills+%C2%B7+MCP+%C2%B7+Python+%2F+Phone-Use&description=1&font=Raleway&language=1&name=1&owner=1&pattern=Diagonal+Stripes&theme=Auto" alt="evergrow"/>
 </p>
 
 <p align="center">
-  <a href="https://github.com/niki914/zafiro"><img src="https://img.shields.io/github/stars/niki914/zafiro?label=stars" alt="stars"/></a>
-  <a href="https://deepwiki.com/niki914/zafiro"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"/></a>
-  <a href="https://github.com/niki914/zafiro/releases/latest"><img src="https://img.shields.io/github/v/release/niki914/zafiro?include_prereleases" alt="release"/></a>
-  <a href="https://github.com/niki914/zafiro/releases/latest"><img src="https://img.shields.io/github/downloads/niki914/zafiro/total" alt="downloads"/></a>
+  <a href="https://github.com/donal100/Evergrow"><img src="https://img.shields.io/github/stars/donal100/Evergrow?label=stars" alt="stars"/></a>
+  <a href="https://github.com/donal100/Evergrow/releases/tag/debug-latest"><img src="https://img.shields.io/github/v/release/donal100/Evergrow?include_prereleases&label=debug%20build" alt="release"/></a>
+  <a href="https://github.com/donal100/Evergrow/releases"><img src="https://img.shields.io/github/downloads/donal100/Evergrow/total" alt="downloads"/></a>
   <img src="https://img.shields.io/badge/kotlin-86.4k-blue" alt="kotlin lines"/>
-  <a href="https://app.codacy.com/gh/niki914/zafiro/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade"><img src="https://app.codacy.com/project/badge/Grade/b4cadbe5d2d74e3885106562cbd9715b" alt="Codacy"/></a>
+  <a href="https://github.com/niki914/zafiro"><img src="https://img.shields.io/badge/upstream-niki914%2Fzafiro-lightgrey" alt="upstream"/></a>
 </p>
 
-## What is Zafiro?
+## What is EverGrow?
+
+EverGrow is Zafiro with a voice. It still runs a full Android agent — screen understanding, device control,
+Skills, MCP, memory, native Shell and Python 3 — but you can now hold a spoken conversation with it: tap the
+microphone to talk, and its answers come back in a natural cloud voice instead of text alone.
+
+The design goal is the boring-but-hard one: make the voice loop feel like a phone call rather than a walkie-talkie.
+That means the microphone closes while the reply is synthesised and spoken, the reply text is allowed to finish
+streaming before it is read aloud, and a finished turn is never replayed. Listen mode keeps the recogniser looping
+so you can ask follow-ups with your hands in your pockets.
+
+### Underlying agent: Zafiro
+
 
 Zafiro is an open-source intelligent Agent running on Android devices, with [BYOK](https://www.ibm.com/think/topics/byok) support. It understands your screen, controls your device, and carries out operations across apps — with full support for Skills, MCP, and memory. It can also run Shell and Python 3 natively and wrap tools on its own to perform tasks such as web search and file downloads, or connect to a remote dev machine via SSH.
 
