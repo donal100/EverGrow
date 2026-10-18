@@ -17,7 +17,7 @@ import java.util.concurrent.TimeUnit
  *
  * 走 OpenAI 兼容的 chat/completions：音频以 base64 data URI 塞进 input_audio。
  * 只认 qwen3-asr-flash 这一个模型名；同系列的 qwen-audio-3.0-asr-flash 在这个
- * 路由上会 400（它只服务于 /api/v1/services/* 那条链路）。
+ * 路由上会 400（只服务于 /api/v1/services/... 那条链路）。
  *
  * 实测（5s m4a）：约 0.8s 往返，11s 音频也只要约 1s——延迟基本与时长无关。
  *
