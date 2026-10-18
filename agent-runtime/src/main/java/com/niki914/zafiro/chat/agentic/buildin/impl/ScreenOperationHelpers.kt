@@ -14,6 +14,8 @@ import com.niki914.zafiro.chat.agentic.buildin.TextToolResult
  * - [ScreenOperationError.SHELL_TIMEOUT], [ScreenOperationError.SHELL_SESSION_LOST]:
  *   the action may have partially executed; the hint warns the LLM to inspect the
  *   tree and NOT blindly retry.
+ * - [ScreenOperationError.INJECT_EVENTS_MISSING]: coordinate injection is unavailable
+ *   permanently; the hint explicitly forbids another coordinate attempt.
  * - All other codes: the action was definitely not executed; the hint tells the LLM
  *   to inspect the included tree and retry.
  *
@@ -31,6 +33,13 @@ internal fun assembleActionResult(
                     "inspect the tree to determine whether the action took effect. " +
                             "Do NOT retry the same action unless the screen confirms " +
                             "it did not execute."
+
+                // The action was rejected before injection. This is a standing device
+                // condition, not a transient failure, so retry advice would be wrong.
+                ScreenOperationError.INJECT_EVENTS_MISSING.code ->
+                    "the action was never executed, and the outcome will not change on " +
+                            "retry: coordinate injection is unavailable on this device. " +
+                            "Do NOT attempt another coordinate tap — use node taps."
 
                 else ->
                     "inspect the included tree and retry without calling read."
