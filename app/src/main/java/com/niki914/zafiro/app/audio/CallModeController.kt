@@ -56,6 +56,9 @@ class CallModeController(
      */
     private var ignoreUntilMs = 0L
 
+    /** 同一路麦克风的备份录音：只有用户说「你听错了」时才需要它。 */
+    private val recorder = UtteranceRecorder(context.filesDir)
+
     /** 交出去之后等这么久还没人 resume() 就自己接上，避免卡死在「已暂停」。 */
     private val watchdog = Runnable { resume() }
 
@@ -63,11 +66,15 @@ class CallModeController(
 
     private val listener = object : RecognitionListener {
         override fun onReadyForSpeech(params: Bundle?) = log("ready")
-        override fun onBeginningOfSpeech() = log("speech start")
+        override fun onBeginningOfSpeech() {
+            recorder.markSpeechStart()
+            log("speech start")
+        }
         override fun onRmsChanged(rmsdB: Float) = Unit
         override fun onBufferReceived(buffer: ByteArray?) = Unit
         override fun onEndOfSpeech() {
             listening = false
+            recorder.markSpeechEnd()
             log("speech end")
         }
 
@@ -118,6 +125,8 @@ class CallModeController(
                 return
             }
             lastUtterance = text
+            // 先把音频存档（连同这次识别结果），万一听错了还能回头重听
+            runCatching { recorder.saveUtterance(text) }
             pause()
             main.removeCallbacks(watchdog)
             main.postDelayed(watchdog, WATCHDOG_MS)
@@ -137,6 +146,7 @@ class CallModeController(
                 }
             }
             log("start")
+            recorder.start()
             startListening()
         }
     }
@@ -151,6 +161,7 @@ class CallModeController(
             runCatching { recognizer?.cancel() }
             runCatching { recognizer?.destroy() }
             recognizer = null
+            recorder.stop()
             log("stop")
         }
     }
@@ -181,7 +192,10 @@ class CallModeController(
         lastSpokenPrefix = text.trim()
     }
 
-    fun release() = stop()
+    fun release() {
+        stop()
+        recorder.release()
+    }
 
     /** 判断一段转写是不是把我们自己刚念的话听回来了。 */
     private fun looksLikeEcho(heard: String, spoken: String): Boolean {

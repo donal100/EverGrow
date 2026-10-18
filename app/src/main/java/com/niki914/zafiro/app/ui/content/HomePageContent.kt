@@ -201,6 +201,12 @@ private var voiceLatchText = ""
  */
 private val listenModeState = mutableStateOf(false)
 
+/** 通话模式期间使用的思考强度：语音对话要的是「马上开口」，不是深思熟虑。 */
+private const val VOICE_THINKING_LEVEL = "minimal"
+
+/** 进通话模式前用户原来的思考强度，退出时还原。 */
+private var savedThinkingLevel: String? = null
+
 /**
  * 流式播报：边生成边念完整的句子，第一句不用等全文。
  * 互斥锁保证「第一句」和「尾巴」不会同时占用播放器（Qwen 合成是并发的）。
@@ -557,6 +563,24 @@ fun HomePageContent(
     }
     LaunchedEffect(listenMode) {
         if (listenMode) callModeController.start() else callModeController.stop()
+
+        // 思考强度跟着模式走：通话模式降到 minimal，退出时还原用户原来的值。
+        // 这样打字时仍然是 high，戴上耳机说话时才变快，不用改配置也不用重启。
+        runCatching {
+            val cfg = XRepo.llmConfigs.active() ?: return@runCatching
+            if (listenMode) {
+                if (savedThinkingLevel == null) savedThinkingLevel = cfg.thinkingLevel
+                if (cfg.thinkingLevel != VOICE_THINKING_LEVEL) {
+                    XRepo.llmConfigs.upsert(cfg.copy(thinkingLevel = VOICE_THINKING_LEVEL))
+                }
+            } else {
+                val restore = savedThinkingLevel
+                savedThinkingLevel = null
+                if (restore != null && cfg.thinkingLevel != restore) {
+                    XRepo.llmConfigs.upsert(cfg.copy(thinkingLevel = restore))
+                }
+            }
+        }
     }
     DisposableEffect(Unit) {
         onDispose { callModeController.release() }
