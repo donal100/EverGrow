@@ -616,16 +616,11 @@ fun LiquidChatComposer(
     // 展开唯一信号源：布局行数。观测到 lineCount > 1 即锁住展开态；
     // expanded 本身改变测量宽度，对称条件会振荡，故回落只看文本清空。
     // 同一 BasicTextField + 同一玻璃容器，切换不丢焦点、键盘不收起。
-    var expandedLatch by remember { mutableStateOf(false) }
-    val expanded = value.contains('\n') || expandedLatch
-    val onLayout: (TextLayoutResult?) -> Unit = { layout ->
-        if (layout != null && !expandedLatch && layout.lineCount > 1) {
-            expandedLatch = true
-        }
-    }
-    LaunchedEffect(value) {
-        if (value.isEmpty()) expandedLatch = false
-    }
+    // 常驻「两行」布局（Grok 的做法）：文本区独占一行、控件排到下面一行。
+    // 单行布局里文本区只能吃按钮剩下的宽度 —— 加上麦克风后它被压到只剩几十 dp，
+    // 占位符直接被截断成 "Type a …"。这里改为始终展开。
+    val expanded = true
+    val onLayout: (TextLayoutResult?) -> Unit = { }
 
     @Composable
     fun attachButton() {
