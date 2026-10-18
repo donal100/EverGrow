@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Zafiro</string>
+    <string name="app_name">Evergrow</string>
     <string name="xposed_desc">Подключите свою модель к голосовому помощнику\n\nСейчас поддерживаются:\n\n- ColorOS Breeno\n- HyperOS XiaoAi</string>
     <string name="ui_onboard_startup_demo_button">Начать</string>
     <string name="ui_onboard_provider_pick_title">Выберите провайдера</string>
