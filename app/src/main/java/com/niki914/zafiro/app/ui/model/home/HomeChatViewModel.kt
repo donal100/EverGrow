@@ -909,8 +909,7 @@ class HomeChatViewModel internal constructor(
         private const val DRAFT_SAVE_DEBOUNCE_MS = 350L
 
         /** 语音模式下随消息一起发出的说明：同一句话写出来和念出来的最佳长度不同。 */
-        private const val VOICE_MODE_NOTE =
-            "[voice mode: this reply will be spoken aloud - answer in one to three short sentences of plain prose, no tables, lists, code, URLs or markdown; put any detail in a follow-up only if asked]"
+        private const val VOICE_MODE_NOTE = "[voice mode: on]"
     }
 }
 
