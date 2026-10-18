@@ -982,6 +982,21 @@ object AccessibilityController {
         return BuiltinToolResult.success("shell keyevent $keyCode performed")
     }
 
+    /**
+     * Maps shell stderr to a specific error code.
+     *
+     * `input` on a non-privileged UID fails with a SecurityException about
+     * INJECT_EVENTS. Without this mapping the caller only sees SHELL_FAILED and
+     * has no way to know that retrying is pointless.
+     */
+    private fun classifyShellStderr(stderr: String): String? = when {
+        stderr.contains("INJECT_EVENTS", ignoreCase = true) ||
+            stderr.contains("Injecting input events", ignoreCase = true) ->
+            ScreenOperationError.INJECT_EVENTS_MISSING.code
+
+        else -> null
+    }
+
     private suspend fun runShellCommand(command: String): ShellResult {
         val identity = ensureShellSession()
         val handle = shellSessionHandle
@@ -996,10 +1011,12 @@ object AccessibilityController {
 
         return when (val outcome = TerminalSessionPool.executeBlocking(handle, command, 15_000L)) {
             is TerminalCommandOutcome.Success -> {
+                val stderrText = outcome.result.stderr.toByteArray().decodeToString().trim()
                 ShellResult(
                     outcome.result.exitCode ?: -1,
                     outcome.result.stdout.toByteArray().decodeToString().trim(),
-                    outcome.result.stderr.toByteArray().decodeToString().trim(),
+                    stderrText,
+                    errorCode = classifyShellStderr(stderrText),
                 )
             }
 
