@@ -430,6 +430,7 @@ fun HomePageContent(
         settingsMenuLabel,
         titleContent,
         uiState.isConfigMenuVisible,
+        uiState.voiceMode,
     ) {
         PageChromeContribution(
             titleContent = titleContent,
@@ -454,6 +455,16 @@ fun HomePageContent(
                             latestViewModel.sendIntent(HomeChatIntent.DismissConfigMenu)
                         }
                         latestViewModel.sendIntent(HomeChatIntent.NewConversation)
+                    },
+                ),
+                PageChromeMenuItem(
+                    key = "voice_mode",
+                    title = if (uiState.voiceMode) "Voice replies: on" else "Voice replies: off",
+                    onClick = {
+                        if (latestUiState.isConfigMenuVisible) {
+                            latestViewModel.sendIntent(HomeChatIntent.DismissConfigMenu)
+                        }
+                        latestViewModel.sendIntent(HomeChatIntent.ToggleVoiceMode)
                     },
                 ),
                 PageChromeMenuItem(
