@@ -2,6 +2,7 @@ package com.niki914.zafiro.app.audio
 
 import android.content.Context
 import android.content.Intent
+import android.media.AudioManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -55,6 +56,14 @@ class CallModeController(
      * 识别器会先收到一段残缺的「自己」，这种结果不该当成用户说话。
      */
     private var ignoreUntilMs = 0L
+
+    /**
+     * 识别器每次开麦/收尾都有自己的提示音，通话模式不停地重开，于是「哔、哔、哔」。
+     * Android 没有关闭它的 API，只能在我们收音期间把系统/通知两路音量压到 0 ——
+     * 媒体音量绝不碰：跑步时用户多半在放音乐。
+     */
+    private val audio = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+    private val mutedStreams = HashMap<Int, Int>()
 
     /** 同一路麦克风的备份录音：只有用户说「你听错了」时才需要它。 */
     private val recorder = UtteranceRecorder(context.filesDir)
@@ -144,6 +153,8 @@ class CallModeController(
         active = true
         paused = false
         lastUtterance = ""
+        // 上一次若是异常退出，音量可能还停在 0：进来先把状态清干净
+        restoreCues()
         main.post {
             if (recognizer == null) {
                 recognizer = SpeechRecognizer.createSpeechRecognizer(context).also {
@@ -160,6 +171,7 @@ class CallModeController(
         active = false
         paused = false
         listening = false
+        restoreCues()
         main.removeCallbacks(restart)
         main.removeCallbacks(watchdog)
         main.post {
@@ -175,6 +187,7 @@ class CallModeController(
         if (!active || paused) return
         paused = true
         listening = false
+        restoreCues()
         main.removeCallbacks(restart)
         main.post { runCatching { recognizer?.cancel() } }
         log("pause")
@@ -226,6 +239,7 @@ class CallModeController(
         if (!active || paused || listening) return
         val r = recognizer ?: return
         listening = true
+        muteCues()
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(
                 RecognizerIntent.EXTRA_LANGUAGE_MODEL,
@@ -244,6 +258,27 @@ class CallModeController(
         }
         runCatching { r.startListening(intent) }
             .onFailure { log("startListening failed: " + it.message) }
+    }
+
+    private fun muteCues() {
+        val am = audio ?: return
+        for (stream in intArrayOf(AudioManager.STREAM_SYSTEM, AudioManager.STREAM_NOTIFICATION)) {
+            runCatching {
+                val current = am.getStreamVolume(stream)
+                if (current > 0 && !mutedStreams.containsKey(stream)) {
+                    mutedStreams[stream] = current
+                    am.setStreamVolume(stream, 0, 0)
+                }
+            }
+        }
+    }
+
+    private fun restoreCues() {
+        val am = audio ?: return
+        mutedStreams.forEach { (stream, volume) ->
+            runCatching { am.setStreamVolume(stream, volume, 0) }
+        }
+        mutedStreams.clear()
     }
 
     private fun log(msg: String) {

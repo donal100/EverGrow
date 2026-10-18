@@ -211,7 +211,6 @@ private var savedThinkingLevel: String? = null
  * 流式播报：边生成边念完整的句子，第一句不用等全文。
  * 互斥锁保证「第一句」和「尾巴」不会同时占用播放器（Qwen 合成是并发的）。
  */
-private val speakerMutex = kotlinx.coroutines.sync.Mutex()
 @Volatile private var streamingTurnId = -1L
 @Volatile private var speechCancelled = false
 
@@ -491,12 +490,8 @@ fun HomePageContent(
                         stableFor = 0
                         if (chunk.isNotEmpty()) {
                             callModeController.noteSpoken(chunk)
-                            speakerMutex.lock()
-                            try {
-                                runCatching { voiceSpeaker.speak(chunk) }
-                            } finally {
-                                speakerMutex.unlock()
-                            }
+                            // 交给流水线：当前句还在放，下一句已经开始合成，句间不留空档
+                            voiceSpeaker.submit(chunk)
                         }
                         continue
                     }
@@ -514,15 +509,11 @@ fun HomePageContent(
                         val rest = text.substring(spoken).trim()
                         if (rest.isNotEmpty()) {
                             callModeController.noteSpoken(rest)
-                            speakerMutex.lock()
-                            try {
-                                runCatching { voiceSpeaker.speak(rest) }
-                            } finally {
-                                speakerMutex.unlock()
-                            }
+                            voiceSpeaker.submit(rest)
                         }
                     }
                 }
+                voiceSpeaker.awaitIdle()
                 voiceLatchTurnId = turnId
                 voiceSpeaker.note("stream done: turn=" + turnId + " spokenChars=" + spoken)
             } finally {
