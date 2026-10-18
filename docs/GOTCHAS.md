@@ -47,3 +47,22 @@ back to shell injection, which then fails. Those need a human tap.
 
 Anything written straight to `/storage/emulated/0/` is invisible to Files/WhatsApp pickers until
 MediaStore is told about it.
+
+## Signing identity is the most expensive thing to get wrong
+
+A signing key is not configuration, it is identity. If two builds of the same package are
+signed differently, Android refuses the update with *"App not installed as package conflicts
+with an existing package"* and the only recovery is uninstalling — which silently destroys the
+app's private data (skills, memory) and its permission grants.
+
+Observed in one session: **four different certificates** across five builds, for the same
+package, from the same workflow. Causes, in order of subtlety:
+
+1. `actions/cache` evicting and regenerating `~/.android/debug.keystore`
+2. AGP's implicit debug signing ignoring a copied keystore and minting its own
+3. A `getPackageArchiveInfo` check that looked right but was never actually run before asking
+   a human to install
+
+Always compare the signer cert of the APK you are about to hand over with the installed app's
+signer, *before* asking for the tap. That check is cheap and it is the difference between one
+install and three.
