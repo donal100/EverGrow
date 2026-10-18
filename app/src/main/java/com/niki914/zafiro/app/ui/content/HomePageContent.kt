@@ -209,16 +209,40 @@ private val speakerMutex = kotlinx.coroutines.sync.Mutex()
 @Volatile private var streamingTurnId = -1L
 @Volatile private var speechCancelled = false
 
+/**
+ * 缩写词：句点后面不是句子结束。不做这一步的话 "e.g." 与 "Dr." 会把一句话劈成两半，
+ * 合成出来就是断在词中间的两段音频。
+ */
+private val ABBREVIATIONS = setOf(
+    "e.g", "i.e", "vs", "dr", "mr", "mrs", "ms", "st", "no", "approx", "etc", "cf", "al",
+)
+
 /** 找一段文本里下一个句末位置（从 from 起算，太短的片段先攒着）。 */
 private fun sentenceEnd(text: String, from: Int): Int {
     var i = from
     while (i < text.length) {
         val c = text[i]
-        if (c == '\n' && i - from >= 12) return i + 1
+        if (c == '\n' && i - from >= 12) {
+            // 列表项（"1. " / "- "）后面换行不算句末，否则会念成 "one" 就停
+            return i + 1
+        }
         if ((c == '.' || c == '!' || c == '?' || c == '。' || c == '！' || c == '？') &&
             i - from >= 12 &&
             (i + 1 >= text.length || text[i + 1].isWhitespace())
         ) {
+            if (c == '.') {
+                val wordStart = text.lastIndexOf(' ', i - 1).let { if (it < from) from else it + 1 }
+                val word = text.substring(wordStart, i).trim().trimStart('(', '"', '\'').lowercase()
+                if (word in ABBREVIATIONS) {
+                    i++
+                    continue
+                }
+                // 单字母缩写（"J. Smith"）也跳过
+                if (word.length == 1) {
+                    i++
+                    continue
+                }
+            }
             return i + 1
         }
         i++
