@@ -193,6 +193,13 @@ private var composerAutoFocusDone = false
  */
 private var voiceLatchTurnId = -1L
 private var voiceLatchText = ""
+
+/**
+ * 通话模式开关。放文件级 Compose state 而不是 remember{}：页面重建、切去设置再回来
+ * 都不该忘记「我正在打电话」。之前用 remember，结果菜单显示 off、麦克风其实还在听。
+ * 进程重启会归零 —— 这是有意的，没人希望应用一启动就自己开麦。
+ */
+private val listenModeState = mutableStateOf(false)
 private const val AUTO_FOCUS_MAX_ATTEMPTS = 20
 private const val AUTO_FOCUS_RETRY_INTERVAL_MILLIS = 150L
 
@@ -374,7 +381,7 @@ fun HomePageContent(
     val voiceScope = remember { CoroutineScope(SupervisorJob() + Dispatchers.IO) }
     // —— 通话模式（Listen mode）：像打电话一样一直听着 ——
     // 用户说完一句 -> 走正常发消息链路 -> agent 回复 -> 念出来 -> 继续听。
-    var listenMode by remember { mutableStateOf(false) }
+    var listenMode by listenModeState
     var pendingUtterance by remember { mutableStateOf<String?>(null) }
     val latestListenMode by rememberUpdatedState(listenMode)
     val callModeController = remember {
@@ -490,6 +497,9 @@ fun HomePageContent(
             latestViewModel.sendIntent(HomeChatIntent.Send)
         }
     }
+    LaunchedEffect(listenMode) {
+        if (listenMode) callModeController.start() else callModeController.stop()
+    }
     DisposableEffect(Unit) {
         onDispose { callModeController.release() }
     }
@@ -584,31 +594,27 @@ fun HomePageContent(
                             latestViewModel.sendIntent(HomeChatIntent.DismissConfigMenu)
                         }
                         val next = !listenMode
-                        listenMode = next
-                        if (next) {
-                            val granted = locationContext.checkSelfPermission(
-                                Manifest.permission.RECORD_AUDIO,
-                            ) == PackageManager.PERMISSION_GRANTED
-                            if (!granted) {
-                                listenMode = false
-                                Toast.makeText(
-                                    locationContext,
-                                    "Microphone permission needed",
-                                    Toast.LENGTH_SHORT,
-                                ).show()
-                            } else {
-                                callModeController.start()
-                                Toast.makeText(
-                                    locationContext,
-                                    "Listening - ask away",
-                                    Toast.LENGTH_SHORT,
-                                ).show()
-                            }
+                        val granted = locationContext.checkSelfPermission(
+                            Manifest.permission.RECORD_AUDIO,
+                        ) == PackageManager.PERMISSION_GRANTED
+                        if (next && !granted) {
+                            Toast.makeText(
+                                locationContext,
+                                "Microphone permission needed",
+                                Toast.LENGTH_SHORT,
+                            ).show()
                         } else {
-                            callModeController.stop()
-                            // 关掉通话模式要立刻静音，不然它还在念上一条
-                            voiceSpeaker.stop()
-                            Toast.makeText(locationContext, "Listen mode off", Toast.LENGTH_SHORT).show()
+                            // 真正的 start/stop 由 LaunchedEffect(listenMode) 负责，这里只翻开关
+                            listenMode = next
+                            if (!next) {
+                                // 关掉通话模式要立刻静音，不然它还在念上一条
+                                voiceSpeaker.stop()
+                            }
+                            Toast.makeText(
+                                locationContext,
+                                if (next) "Listening - ask away" else "Listen mode off",
+                                Toast.LENGTH_SHORT,
+                            ).show()
                         }
                     },
                 ),
