@@ -34,17 +34,33 @@ class VoiceReplySpeaker(private val appContext: Context) {
 
     /** 念一段文本；Result 里是「实际走了哪条路」，方便调用方提示或诊断。 */
     suspend fun speak(text: String): Result<String> = withContext(Dispatchers.IO) {
+        log("speak() called, chars=" + text.length)
         val clean = SpeechOutput.toSpeakable(text)
-        if (clean.isBlank()) return@withContext Result.success("nothing to speak")
+        if (clean.isBlank()) {
+            log("speak() aborted: empty after markdown strip")
+            return@withContext Result.success("nothing to speak")
+        }
+        log("cleaned chars=" + clean.length + " head=" + clean.take(60))
 
         runCatching { speakWithQwen(clean) }.fold(
-            onSuccess = { Result.success("qwen") },
+            onSuccess = {
+                log("qwen path OK")
+                Result.success("qwen")
+            },
             onFailure = { err ->
-                // 云端失败不打断回合：退回本机引擎，把原因留给日志/调用方
+                log("qwen FAILED: " + (err.message ?: err.javaClass.simpleName) + " -> falling back to device TTS")
                 fallback.speak(clean)
                 Result.failure(err)
             },
         )
+    }
+
+    /** 诊断用：这台设备拿不到 logcat，落盘一个增量日志。 */
+    private fun log(msg: String) {
+        runCatching {
+            File(appContext.filesDir, "voice_debug.log")
+                .appendText(System.currentTimeMillis().toString() + "  " + msg + "\n")
+        }
     }
 
     private suspend fun speakWithQwen(text: String) {
