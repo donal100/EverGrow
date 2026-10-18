@@ -39,16 +39,27 @@ class VoiceReplySpeaker(private val appContext: Context) {
     @Volatile
     private var cancelled = false
 
-    /** 念一段文本；Result 里是「实际走了哪条路」，方便调用方提示或诊断。 */
-    suspend fun speak(text: String): Result<String> = withContext(Dispatchers.IO) {
+    /**
+     * 念一段文本；Result 里是「实际走了哪条路」，方便调用方提示或诊断。
+     *
+     * [preferDevice] 用于通话模式：本机引擎几乎立刻出声，Qwen 要先合成再下载，
+     * 一来一回 1.5-2 秒。走路跑步时的对话，快比好听重要。
+     */
+    suspend fun speak(text: String, preferDevice: Boolean = false): Result<String> =
+        withContext(Dispatchers.IO) {
         cancelled = false
-        log("speak() called, chars=" + text.length)
+        log("speak() called, chars=" + text.length + " preferDevice=" + preferDevice)
         val clean = SpeechOutput.toSpeakable(text)
         if (clean.isBlank()) {
             log("speak() aborted: empty after markdown strip")
             return@withContext Result.success("nothing to speak")
         }
         log("cleaned chars=" + clean.length + " head=" + clean.take(60))
+
+        if (preferDevice) {
+            if (!cancelled) fallback.speak(clean)
+            return@withContext Result.success("device")
+        }
 
         if (cancelled) {
             log("speak() cancelled before synthesis")
