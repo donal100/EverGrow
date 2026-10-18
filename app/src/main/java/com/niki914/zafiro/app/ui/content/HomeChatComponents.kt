@@ -1,6 +1,15 @@
 package com.niki914.zafiro.app.ui.content
 
 import android.graphics.BitmapFactory
+import android.Manifest
+import android.content.pm.PackageManager
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.ui.platform.LocalContext
+import com.niki914.zafiro.app.audio.VoiceRecorder
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.LocalIndication
 import com.kyant.backdrop.Backdrop
@@ -501,6 +510,52 @@ fun LiquidChatComposer(
     // contextProgress 为 null（无记账）时不画环。
     val contentColor = MaterialTheme.colorScheme.primary
 
+    // 语音：本地状态即可，当前只落盘，不参与草稿/发送流程。
+    val appContext = LocalContext.current.applicationContext
+    val voiceRecorder = remember { VoiceRecorder(appContext) }
+    var isRecording by remember { mutableStateOf(false) }
+    DisposableEffect(Unit) {
+        onDispose { voiceRecorder.release() }
+    }
+    fun beginRecording() {
+        isRecording = runCatching { voiceRecorder.start() }.isSuccess
+        val hint = if (isRecording) "Recording… tap again to stop" else "Could not start recording"
+        Toast.makeText(appContext, hint, Toast.LENGTH_SHORT).show()
+    }
+    val recordPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted) {
+            beginRecording()
+        } else {
+            Toast.makeText(appContext, "Microphone permission denied", Toast.LENGTH_SHORT).show()
+        }
+    }
+    fun toggleRecording() {
+        if (isRecording) {
+            val saved = voiceRecorder.stop()
+            isRecording = false
+            if (saved != null) {
+                val (file, ms) = saved
+                Toast.makeText(
+                    appContext,
+                    "Saved " + file.name + " (" + (ms / 1000.0) + "s)",
+                    Toast.LENGTH_LONG,
+                ).show()
+            } else {
+                Toast.makeText(appContext, "Recording too short, discarded", Toast.LENGTH_SHORT).show()
+            }
+            return
+        }
+        val granted =
+            appContext.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+        if (granted) {
+            beginRecording()
+        } else {
+            recordPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
+
     // 展开唯一信号源：布局行数。观测到 lineCount > 1 即锁住展开态；
     // expanded 本身改变测量宽度，对称条件会振荡，故回落只看文本清空。
     // 同一 BasicTextField + 同一玻璃容器，切换不丢焦点、键盘不收起。
@@ -573,6 +628,23 @@ fun LiquidChatComposer(
         }
     }
 
+    @Composable
+    fun speakButton() {
+        // 录音中把图标染成 error 色：没有这个反馈，用户无法判断是否正在采集。
+        val tint = if (isRecording) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+        CompositionLocalProvider(LocalContentColor provides tint) {
+            ActionBarButton(
+                onClick = { toggleRecording() },
+                modifier = Modifier.offset(x = (-6).dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Mic,
+                    contentDescription = if (isRecording) "Stop Recording Button" else "Speak Button",
+                )
+            }
+        }
+    }
+
     // 唯一 BasicTextField 实例：expandedLayout 只切换容器内部布局，不重建字段
     LiquidTextField(
         value = value,
@@ -588,13 +660,19 @@ fun LiquidChatComposer(
         expandedLayout = expanded,
         expandedActionsRow = {
             attachButton()
+            speakButton()
             sendButton()
         },
         backdrop = backdrop,
         glassStyle = LiquidGlassPresets.ComposerBar,
         modifier = modifier.fillMaxWidth(),
         leadingContent = { attachButton() },
-        trailingContent = { sendButton() },
+        trailingContent = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                speakButton()
+                sendButton()
+            }
+        },
     )
 }
 
