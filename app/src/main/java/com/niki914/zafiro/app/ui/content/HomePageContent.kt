@@ -142,7 +142,6 @@ import com.niki914.uikit.infra.scrollbar.rememberLiquidOverscrollController
 import com.niki914.zafiro.api.model.ApprovalDecision
 import com.niki914.zafiro.api.model.ApprovalRequest
 import com.niki914.zafiro.app.R
-import com.niki914.zafiro.app.audio.SpeechOutput
 import com.niki914.zafiro.app.conversation.TurnBranchState
 import com.niki914.zafiro.app.notification.TurnNotificationManager
 import com.niki914.zafiro.app.ui.PageChromeContribution
@@ -343,31 +342,9 @@ fun HomePageContent(
         }
     }
 
-    // —— 语音播报 ——
-    // 只在真的观察到「生成中→结束」之后才朗读，否则打开历史会话会把最后一条旧消息念一遍。
-    // 播的是 final 文本，不是流式中间态：边生成边念会在修订时反复改口。
-    // LocalContext.current 是 @Composable 调用，不能写在 remember{} 的 lambda 里
-    val speechContext = LocalContext.current.applicationContext
-    val speechOutput = remember { SpeechOutput(speechContext) }
-    var sawGenerating by remember { mutableStateOf(false) }
-    DisposableEffect(Unit) {
-        onDispose { speechOutput.release() }
-    }
-    LaunchedEffect(uiState.isGenerating, uiState.turns) {
-        if (uiState.isGenerating) {
-            sawGenerating = true
-            return@LaunchedEffect
-        }
-        if (!sawGenerating) return@LaunchedEffect
-        sawGenerating = false
-        val reply = uiState.turns.lastOrNull()
-            ?.blocks
-            ?.filterIsInstance<HomeChatBlock.Text>()
-            ?.joinToString("\n") { it.text }
-            ?.trim()
-            .orEmpty()
-        if (reply.isNotEmpty()) speechOutput.speak(reply)
-    }
+    // 语音播报交给 agent 自己决定：它有两个工具（py_speak 用本机引擎，py_speak_qwen 用 Qwen 云端音色），
+    // 由模型判断「这条回答要不要念、用哪个嗓子」。这里不再无条件朗读——否则会出现
+    // 「自动朗读一次 + 工具再念一次」的双重声音。
 
     LaunchedEffect(Unit) {
         latestViewModel.sendIntent(HomeChatIntent.RefreshConfigs)
