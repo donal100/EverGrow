@@ -606,6 +606,8 @@ fun HomePageContent(
                             }
                         } else {
                             callModeController.stop()
+                            // 关掉通话模式要立刻静音，不然它还在念上一条
+                            voiceSpeaker.stop()
                             Toast.makeText(locationContext, "Listen mode off", Toast.LENGTH_SHORT).show()
                         }
                     },
@@ -710,6 +712,10 @@ fun HomePageContent(
             viewModel.sendIntent(HomeChatIntent.InputChanged(value))
         },
         onToggleVoiceMode = { viewModel.sendIntent(HomeChatIntent.ToggleVoiceMode) },
+        onInterruptSpeech = {
+            voiceSpeaker.stop()
+            if (listenMode) callModeController.resume()
+        },
         onSendClick = {
             val query = uiState.input.trim()
             val hasAttachments =
@@ -1033,6 +1039,7 @@ private fun HomePageContentBody(
     turnBranches: Map<Long, TurnBranchState> = emptyMap(),
     onSwitchTurnBranch: (Long, Int) -> Unit = { _, _ -> },
     onToggleVoiceMode: () -> Unit = {},
+    onInterruptSpeech: () -> Unit = {},
 ) {
 
     // 底部避让总高：composer 底距 + 实测高度 + 统一视觉间距。列表贴底留白与箭头
@@ -1213,6 +1220,7 @@ private fun HomePageContentBody(
                 onAttachImageClick = { attachSheetVisible = true },
                 voiceMode = uiState.voiceMode,
                 onToggleVoiceMode = onToggleVoiceMode,
+                onInterruptSpeech = onInterruptSpeech,
                 backdrop = chatBackdrop,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)

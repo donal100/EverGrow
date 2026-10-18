@@ -32,8 +32,16 @@ class VoiceReplySpeaker(private val appContext: Context) {
     private val fallback = SpeechOutput(appContext)
     private var player: MediaPlayer? = null
 
+    /**
+     * 用户打断的开关。合成要 1-2 秒，光 release 播放器不够 ——
+     * 必须让已经在路上的那一次合成知道「别念了」，否则它下载完照样开口。
+     */
+    @Volatile
+    private var cancelled = false
+
     /** 念一段文本；Result 里是「实际走了哪条路」，方便调用方提示或诊断。 */
     suspend fun speak(text: String): Result<String> = withContext(Dispatchers.IO) {
+        cancelled = false
         log("speak() called, chars=" + text.length)
         val clean = SpeechOutput.toSpeakable(text)
         if (clean.isBlank()) {
@@ -42,6 +50,10 @@ class VoiceReplySpeaker(private val appContext: Context) {
         }
         log("cleaned chars=" + clean.length + " head=" + clean.take(60))
 
+        if (cancelled) {
+            log("speak() cancelled before synthesis")
+            return@withContext Result.success("cancelled")
+        }
         runCatching { speakWithQwen(clean) }.fold(
             onSuccess = {
                 log("qwen path OK")
@@ -49,7 +61,7 @@ class VoiceReplySpeaker(private val appContext: Context) {
             },
             onFailure = { err ->
                 log("qwen FAILED: " + (err.message ?: err.javaClass.simpleName) + " -> falling back to device TTS")
-                fallback.speak(clean)
+                if (!cancelled) fallback.speak(clean)
                 Result.failure(err)
             },
         )
@@ -101,6 +113,10 @@ class VoiceReplySpeaker(private val appContext: Context) {
                 response.body?.bytes() ?: error("TTS audio body empty")
             }
 
+        if (cancelled) {
+            log("speakWithQwen cancelled before playback")
+            return
+        }
         val file = File(appContext.cacheDir, "tts_" + System.currentTimeMillis() + ".wav")
         file.writeBytes(bytes)
         try {
@@ -131,6 +147,7 @@ class VoiceReplySpeaker(private val appContext: Context) {
     }
 
     fun stop() {
+        cancelled = true
         runCatching { player?.stop() }
         runCatching { player?.release() }
         player = null

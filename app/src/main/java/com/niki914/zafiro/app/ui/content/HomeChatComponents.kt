@@ -513,6 +513,8 @@ fun LiquidChatComposer(
     onAttachImageClick: () -> Unit = {},
     voiceMode: Boolean = false,
     onToggleVoiceMode: () -> Unit = {},
+    /** 用户想立刻打断播报时调用（点麦克风、关掉 Speak 开关都算）。 */
+    onInterruptSpeech: () -> Unit = {},
     backdrop: Backdrop? = null,
 ) {
     // 发送按钮恒亮：无文本点击时触发 Toast 提示，能不能点不靠颜色表达。
@@ -600,6 +602,8 @@ fun LiquidChatComposer(
 
     fun toggleRecording() {
         if (isTranscribing) return
+        // 点麦克风 = 打断：先把正在念的声音掐掉，再开录。电话里也是这个手感。
+        if (!isRecording) onInterruptSpeech()
         if (isRecording) {
             stopAndTranscribe()
             return
@@ -694,7 +698,10 @@ fun LiquidChatComposer(
                 .offset(x = (-4).dp)
                 .clip(CircleShape)
                 .background(bg)
-                .clickable(onClick = onToggleVoiceMode)
+                .clickable {
+                    if (voiceMode) onInterruptSpeech()
+                    onToggleVoiceMode()
+                }
                 .padding(horizontal = 14.dp, vertical = 9.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
