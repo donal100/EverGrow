@@ -37,6 +37,8 @@ internal data class HomeChatConfigDependencies(
     val loadConfigs: suspend () -> LlmConfigsDocument,
 ) {
     companion object {
+        private const val VOICE_MODE_NOTE =
+            "[voice mode: this reply will be spoken aloud - answer in one to three short sentences of plain prose, no tables, lists, code, URLs or markdown; put any detail in a follow-up only if asked]"
         val Default = HomeChatConfigDependencies(
             loadConfigs = { XRepo.llmConfigs.document() },
         )
@@ -102,6 +104,7 @@ class HomeChatViewModel internal constructor(
     override suspend fun handleIntent(intent: HomeChatIntent) {
         when (intent) {
             is HomeChatIntent.InputChanged -> onInputChanged(intent.value)
+            HomeChatIntent.ToggleVoiceMode -> updateState { copy(voiceMode = !voiceMode) }
             HomeChatIntent.Send -> sendCurrentInput()
             is HomeChatIntent.ImageAttached -> attachImage(intent.uri)
             is HomeChatIntent.ImageRemoved -> removeImage(intent.id)
@@ -514,7 +517,15 @@ class HomeChatViewModel internal constructor(
             sendEffect(HomeChatEffect.EmptyInputAttempted)
             return
         }
-        agent.updateDraft { it.copy(text = trimmedInput) }
+        // 语音模式下让模型知道回答将被朗读：同一句话写出来和念出来的最佳长度完全不同。
+        // 这条注记随消息一起进入会话（用户能看到），因为 app 与 agent-runtime 之间有 IPC 边界，
+        // 真正「隐形」的每回合注入需要改 AIDL 协议，先不做。
+        val outboundText = if (currentState.voiceMode) {
+            VOICE_MODE_NOTE + "\n\n" + trimmedInput
+        } else {
+            trimmedInput
+        }
+        agent.updateDraft { it.copy(text = outboundText) }
         // stream() is synchronous; don't let it consume Pending images before AgentImpl finishes ingest.
         agent.draft.first { draft -> draft.images.none { it is DraftImage.Pending } }
         updateState { copy(isGenerating = true) }
