@@ -753,11 +753,15 @@ fun LiquidChatComposer(
         backdrop = backdrop,
         glassStyle = LiquidGlassPresets.ComposerBar,
         modifier = modifier.fillMaxWidth(),
-        leadingContent = { attachButton() },
+        leadingContent = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                attachButton()
+                voiceToggleButton()
+            }
+        },
         trailingContent = {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 speakButton()
-                voiceToggleButton()
                 sendButton()
             }
         },
