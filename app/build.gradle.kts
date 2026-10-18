@@ -34,6 +34,15 @@ android {
     }
 
     signingConfigs {
+        // Deterministic debug signing. Without an explicit config AGP falls back to its
+        // own ~/.android/debug.keystore handling and can regenerate the key, which
+        // silently breaks in-place updates (package conflicts with an existing package).
+        create("forkDebug") {
+            storeFile = rootProject.file("ci/debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
         create("release") {
             storeFile = file(project.property("RELEASE_STORE_FILE") as String)
             storePassword = project.property("RELEASE_STORE_PASSWORD") as String
@@ -53,6 +62,7 @@ android {
             )
         }
         debug {
+            signingConfig = signingConfigs.getByName("forkDebug")
             applicationIdSuffix = ".debug"
             ndk {
                 abiFilters += "x86_64"   // 模拟器调试
