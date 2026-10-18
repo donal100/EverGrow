@@ -578,6 +578,9 @@ class HomeChatViewModel internal constructor(
                 savedConfigs = currentState.savedConfigs,
                 globalActiveConfigId = currentState.globalActiveConfigId,
                 boundConfigId = null,
+                // 重建状态时必须带上 voiceMode：否则「新建会话 / 加载会话」会把语音模式悄悄关掉，
+                // 而用户看到的是开关还亮着（这正是之前「有 [voice mode: on] 标记却没有声音」的原因）
+                voiceMode = currentState.voiceMode,
             )
         }
         viewModelScope.launch {
@@ -822,6 +825,9 @@ class HomeChatViewModel internal constructor(
                 savedConfigs = currentState.savedConfigs,
                 globalActiveConfigId = currentState.globalActiveConfigId,
                 boundConfigId = null,
+                // 重建状态时必须带上 voiceMode：否则「新建会话 / 加载会话」会把语音模式悄悄关掉，
+                // 而用户看到的是开关还亮着（这正是之前「有 [voice mode: on] 标记却没有声音」的原因）
+                voiceMode = currentState.voiceMode,
             )
         }
         viewModelScope.launch {
