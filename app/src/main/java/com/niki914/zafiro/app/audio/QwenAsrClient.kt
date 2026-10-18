@@ -85,7 +85,7 @@ class QwenAsrClient(private val keyFile: File) {
         private const val ENDPOINT =
             "https://maas.qwencloudapi.com/compatible-mode/v1/chat/completions"
         private const val MODEL = "qwen3-asr-flash"
-        private const val MIME = "audio/mp4"
+        private const val MIME = "audio/wav"
         private val JSON = "application/json".toMediaType()
 
         /** 录音文件与 key 的约定位置（都在应用私有目录内）。 */
