@@ -24,5 +24,6 @@ Re-running these is safe. If a step is already done, skip it and say so.
 
 - Credit niki914 in README, LICENSE and the About screen. MIT requires the notice be kept.
 - Do not rename `applicationId` outside the `com.niki914.zafiro.` namespace — see docs/GOTCHAS.md.
-- `main` on the fork is still upstream. The fork's work lives on
-  `feat/inject-events-preflight` and has not been merged; do not assume main reflects it.
+- `main` now carries the fork work (merged from `feat/inject-events-preflight`):
+  label, CI + committed keystore, `INJECT_EVENTS_MISSING`, docs, locale labels.
+  `feat/*` branches may be ahead of `main`; check before assuming.
