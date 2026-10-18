@@ -40,6 +40,16 @@ class CallModeController(
     private var lastUtterance = ""
     private var lastSpokenPrefix = ""
 
+    /**
+     * 是否已经有一次识别在跑。SpeechRecognizer 不允许重叠调用：
+     * cancel() 还没落地就再 startListening() 会连发 ERROR_CLIENT(5)，
+     * 日志里那一串 error=5 就是这么来的 —— 一条都没真正开始听。
+     */
+    private var listening = false
+
+    /** 连续失败次数，用来退避；成功出结果就清零。 */
+    private var errorStreak = 0
+
     /** 交出去之后等这么久还没人 resume() 就自己接上，避免卡死在「已暂停」。 */
     private val watchdog = Runnable { resume() }
 
@@ -50,7 +60,10 @@ class CallModeController(
         override fun onBeginningOfSpeech() = log("speech start")
         override fun onRmsChanged(rmsdB: Float) = Unit
         override fun onBufferReceived(buffer: ByteArray?) = Unit
-        override fun onEndOfSpeech() = log("speech end")
+        override fun onEndOfSpeech() {
+            listening = false
+            log("speech end")
+        }
 
         override fun onPartialResults(partialResults: Bundle?) {
             // 只看最终结果：中间态会让 agent 收到半句话
@@ -59,12 +72,17 @@ class CallModeController(
         override fun onEvent(eventType: Int, params: Bundle?) = Unit
 
         override fun onError(error: Int) {
+            listening = false
             log("error=" + error)
-            // 6/7（no match / speech timeout）是正常的「静默」结果，直接重开
-            schedule(POST_ERROR_RESTART_MS)
+            // 6/7（no match / speech timeout）是正常的「静默」结果；5 是客户端状态没准备好。
+            // 都退避重开，连续失败就拉长间隔，避免把识别器打成 error=5 风暴。
+            errorStreak = (errorStreak + 1).coerceAtMost(5)
+            schedule((300L * errorStreak * errorStreak).coerceAtMost(3000L))
         }
 
         override fun onResults(results: Bundle?) {
+            listening = false
+            errorStreak = 0
             val text = results
                 ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                 ?.firstOrNull()
@@ -116,6 +134,7 @@ class CallModeController(
     fun stop() {
         active = false
         paused = false
+        listening = false
         main.removeCallbacks(restart)
         main.removeCallbacks(watchdog)
         main.post {
@@ -129,6 +148,7 @@ class CallModeController(
     fun pause() {
         if (!active || paused) return
         paused = true
+        listening = false
         main.removeCallbacks(restart)
         main.post { runCatching { recognizer?.cancel() } }
         log("pause")
@@ -137,6 +157,7 @@ class CallModeController(
     fun resume() {
         if (!active) return
         paused = false
+        listening = false
         main.removeCallbacks(watchdog)
         main.removeCallbacks(restart)
         // 稍等再开麦：TTS 的尾音还没散干净就收音会把结尾吃回去
@@ -157,8 +178,9 @@ class CallModeController(
     }
 
     private fun startListening() {
-        if (!active || paused) return
+        if (!active || paused || listening) return
         val r = recognizer ?: return
+        listening = true
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(
                 RecognizerIntent.EXTRA_LANGUAGE_MODEL,
@@ -189,7 +211,7 @@ class CallModeController(
     private companion object {
         const val POST_ERROR_RESTART_MS = 350L
         const val RESUME_DELAY_MS = 450L
-        const val WATCHDOG_MS = 90_000L
+        const val WATCHDOG_MS = 25_000L
         const val COMPLETE_SILENCE_MS = 900L
         const val POSSIBLY_COMPLETE_SILENCE_MS = 600L
     }

@@ -459,12 +459,17 @@ fun HomePageContent(
         voiceLatchTurnId = turnId
         voiceLatchText = reply
         voiceScope.launch {
-            // 念话期间闭麦，念完再把话筒交还给通话模式
+            // 念话期间闭麦，念完再把话筒交还给通话模式。
+            // resume 放 finally：念话被取消（切页面、被打断）时也要把麦交回去，
+            // 否则通话模式就永远停在那儿——用户看到的就是「不听了」。
             callModeController.pause()
             voiceSpeaker.stop()
             callModeController.noteSpoken(reply)
-            runCatching { voiceSpeaker.speak(reply) }
-            if (latestListenMode) callModeController.resume()
+            try {
+                runCatching { voiceSpeaker.speak(reply) }
+            } finally {
+                if (latestListenMode) callModeController.resume()
+            }
         }
     }
 
