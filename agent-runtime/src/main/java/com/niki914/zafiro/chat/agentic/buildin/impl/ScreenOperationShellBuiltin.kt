@@ -99,6 +99,16 @@ class ScreenOperationShellBuiltin : TextResultBuiltinTool() {
                     )
                 }
 
+                ScreenOperationError.INJECT_EVENTS_MISSING.code -> {
+                    result.copy(
+                        message = "Coordinate input is unavailable on this device. The shell runs as an " +
+                                "unprivileged app UID, so `input` cannot inject events (INJECT_EVENTS). " +
+                                "This is NOT retryable. Use screen_operation_accessibility node taps " +
+                                "instead; where a system dialog ignores accessibility clicks, a human " +
+                                "tap is required.",
+                    )
+                }
+
                 else -> result
             }
             return assembleActionResult(enhanced, captureResult)

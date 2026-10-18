@@ -1,3 +1,15 @@
+> **Evergrow** is a fork of [Zafiro](https://github.com/niki914/zafiro) by [niki914](https://github.com/niki914),
+> used under the MIT licence. The architecture, agent runtime and tool design are his work — this fork exists to
+> carry a small set of fixes. Upstream credit and the original `LICENSE` are retained unchanged.
+>
+> Fork additions:
+> - CI baseline build (`.github/workflows/build.yml`)
+> - `INJECT_EVENTS_MISSING` capability preflight for coordinate input
+> - guided onboarding for Android 13+ restricted settings
+>
+> **Build requirements** (undocumented upstream, found the hard way): JDK 17 **and Python 3.11** —
+> Chaquopy's `installDebugPythonRequirements` task fails without a `python3.11` on PATH.
+
 <div align="right">
 
 **[中文](README_CN.md)** | English

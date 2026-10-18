@@ -1,0 +1,83 @@
+name: build
+
+# Verifies the fork compiles. No signing secrets needed for debug.
+on:
+  push:
+    branches: [ "main", "feat/**" ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  assemble:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11 (Chaquopy build requirement)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Gradle cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', 'gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: gradle-${{ runner.os }}-
+
+      - name: Make gradlew executable
+        run: chmod +x ./gradlew
+
+      - name: Use committed debug keystore
+        # A signing identity must be byte-identical for every build or Android refuses
+        # to update over an existing install. actions/cache is best-effort (evictions
+        # silently produce new keys), so the keystore lives in the repo instead.
+        # This is a DEBUG key only: its password is the well-known "android" and it
+        # signs nothing but this fork's debug APKs.
+        run: |
+          mkdir -p ~/.android
+          if [ -f ci/debug.keystore ]; then
+            cp ci/debug.keystore ~/.android/debug.keystore
+            echo "using committed debug keystore"
+          else
+            echo "::warning::ci/debug.keystore missing - generating a THROWAWAY key. Updates will fail."
+            keytool -genkeypair -v -keystore ~/.android/debug.keystore \
+              -storepass android -keypass android -alias androiddebugkey \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+          fi
+
+      - name: Publish keystore for commit (first run only)
+        if: ${{ hashFiles('ci/debug.keystore') == '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-keystore-for-commit
+          path: ~/.android/debug.keystore
+          retention-days: 7
+
+      - name: Assemble debug
+        run: ./gradlew assembleDebug --stacktrace --no-daemon
+
+      - name: Upload APK
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evergrow-debug-apk
+          path: |
+            **/build/outputs/apk/debug/*.apk
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Unit tests
+        run: ./gradlew testDebugUnitTest --stacktrace --no-daemon
+        continue-on-error: true
+
