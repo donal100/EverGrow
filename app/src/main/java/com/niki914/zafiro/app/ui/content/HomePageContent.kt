@@ -160,6 +160,7 @@ import com.niki914.zafiro.app.ui.model.home.HomeChatUiState
 import com.niki914.zafiro.app.ui.model.home.HomeChatViewModel
 import com.niki914.zafiro.app.ui.model.home.HomeToolState
 import com.niki914.zafiro.app.ui.model.home.HomeToolStatus
+import com.niki914.zafiro.app.audio.VoiceReplySpeaker
 import com.niki914.zafiro.app.ui.model.home.MessageActionsDisplay
 import com.niki914.zafiro.app.ui.nav.TopBarActionSpec
 import com.niki914.zafiro.business.application.ApplicationService
@@ -345,6 +346,34 @@ fun HomePageContent(
     // 语音播报交给 agent 自己决定：它有两个工具（py_speak 用本机引擎，py_speak_qwen 用 Qwen 云端音色），
     // 由模型判断「这条回答要不要念、用哪个嗓子」。这里不再无条件朗读——否则会出现
     // 「自动朗读一次 + 工具再念一次」的双重声音。
+
+    // —— 语音模式：回合结束后把最终回答念出来 ——
+    // 只有真的观察到「生成中→结束」才念，避免打开历史会话时朗读旧消息；
+    // 播的是 final 文本（流式中间态会被反复修正，边生成边念会不停改口）。
+    val voiceSpeaker = remember { VoiceReplySpeaker(LocalContext.current.applicationContext) }
+    var voiceSawGenerating by remember { mutableStateOf(false) }
+    DisposableEffect(Unit) {
+        onDispose { voiceSpeaker.release() }
+    }
+    LaunchedEffect(uiState.isGenerating, uiState.turns, uiState.voiceMode) {
+        if (uiState.isGenerating) {
+            voiceSawGenerating = true
+            return@LaunchedEffect
+        }
+        if (!voiceSawGenerating) return@LaunchedEffect
+        voiceSawGenerating = false
+        if (!uiState.voiceMode) return@LaunchedEffect
+        val reply = uiState.turns.lastOrNull()
+            ?.blocks
+            ?.filterIsInstance<HomeChatBlock.Text>()
+            ?.joinToString("\n") { it.text }
+            ?.trim()
+            .orEmpty()
+        if (reply.isNotEmpty()) {
+            // 失败不打断 UI：VoiceReplySpeaker 内部已退回本机 TTS
+            runCatching { voiceSpeaker.speak(reply) }
+        }
+    }
 
     LaunchedEffect(Unit) {
         latestViewModel.sendIntent(HomeChatIntent.RefreshConfigs)
@@ -998,6 +1027,8 @@ private fun HomePageContentBody(
                 pendingImages = pendingImages,
                 pendingFiles = pendingFiles,
                 onAttachImageClick = { attachSheetVisible = true },
+                voiceMode = uiState.voiceMode,
+                onToggleVoiceMode = { latestViewModel.sendIntent(HomeChatIntent.ToggleVoiceMode) },
                 backdrop = chatBackdrop,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
