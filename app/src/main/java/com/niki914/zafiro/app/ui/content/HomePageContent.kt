@@ -727,6 +727,7 @@ fun HomePageContent(
             voiceSpeaker.stop()
             if (listenMode) callModeController.resume()
         },
+        listenMode = listenMode,
         onSendClick = {
             val query = uiState.input.trim()
             val hasAttachments =
@@ -1051,6 +1052,7 @@ private fun HomePageContentBody(
     onSwitchTurnBranch: (Long, Int) -> Unit = { _, _ -> },
     onToggleVoiceMode: () -> Unit = {},
     onInterruptSpeech: () -> Unit = {},
+    listenMode: Boolean = false,
 ) {
 
     // 底部避让总高：composer 底距 + 实测高度 + 统一视觉间距。列表贴底留白与箭头
@@ -1232,6 +1234,7 @@ private fun HomePageContentBody(
                 voiceMode = uiState.voiceMode,
                 onToggleVoiceMode = onToggleVoiceMode,
                 onInterruptSpeech = onInterruptSpeech,
+                listenMode = listenMode,
                 backdrop = chatBackdrop,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)

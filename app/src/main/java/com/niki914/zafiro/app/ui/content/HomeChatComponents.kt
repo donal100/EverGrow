@@ -515,6 +515,8 @@ fun LiquidChatComposer(
     onToggleVoiceMode: () -> Unit = {},
     /** 用户想立刻打断播报时调用（点麦克风、关掉 Speak 开关都算）。 */
     onInterruptSpeech: () -> Unit = {},
+    /** 通话模式是否正在听：药丸改成醒目的「Listening」，不用翻菜单也知道状态。 */
+    listenMode: Boolean = false,
     backdrop: Backdrop? = null,
 ) {
     // 发送按钮恒亮：无文本点击时触发 Toast 提示，能不能点不靠颜色表达。
@@ -690,7 +692,7 @@ fun LiquidChatComposer(
     fun speakPill() {
         // 照 Grok 的做法：带文字的 Speak 开关。开着时实心高亮——
         // 光看图标形状在 48dp 下分辨不出开关，配一个词才一眼看懂。
-        val on = voiceMode
+        val on = voiceMode || listenMode
         val bg = if (on) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.surfaceVariant
         val fg = if (on) MaterialTheme.colorScheme.onError else MaterialTheme.colorScheme.onSurfaceVariant
         Row(
@@ -713,7 +715,8 @@ fun LiquidChatComposer(
                 modifier = Modifier.size(18.dp),
             )
             Text(
-                text = "Speak",
+                // 通话模式优先：一直听着和「会念回复」是两件事，状态不能混着显示
+                text = if (listenMode) "Listening" else "Speak",
                 color = fg,
                 style = MaterialTheme.typography.labelLarge,
             )
