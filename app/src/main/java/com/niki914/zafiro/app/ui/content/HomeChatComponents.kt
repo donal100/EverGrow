@@ -687,7 +687,8 @@ fun LiquidChatComposer(
     fun voiceToggleButton() {
         // 语音模式：开着时回答会被念出来。用 VolumeUp 的实心/描边差别做状态提示，
         // 并额外用主色高亮——只靠图标形状在 48dp 下不够明显。
-        val tint = if (voiceMode) MaterialTheme.colorScheme.primary else LocalContentColor.current
+        // 红色 = 正在语音模式，和麦克风录音态同一套语义，一眼能分辨开关
+        val tint = if (voiceMode) MaterialTheme.colorScheme.error else LocalContentColor.current
         CompositionLocalProvider(LocalContentColor provides tint) {
             ActionBarButton(
                 onClick = onToggleVoiceMode,
