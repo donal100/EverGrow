@@ -2,6 +2,7 @@ package com.niki914.zafiro.app.audio
 
 import android.content.Context
 import android.media.MediaPlayer
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -55,7 +56,12 @@ class VoiceReplySpeaker(private val appContext: Context) {
      * 这里让下一句在当前句还响着的时候就开始合成，接缝就没了。
      */
     private val pending = LinkedBlockingQueue<String>()
-    private val workerScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val workerScope = CoroutineScope(
+        SupervisorJob() + Dispatchers.IO + CoroutineExceptionHandler { _, err ->
+            // 音频线程出什么事都不该带走整个应用：记一行，继续服务下一条
+            log("audio worker error: " + (err.message ?: err.javaClass.simpleName))
+        },
+    )
     private val workerStarted = AtomicBoolean(false)
 
     @Volatile
@@ -108,6 +114,7 @@ class VoiceReplySpeaker(private val appContext: Context) {
         val clean = SpeechOutput.toSpeakable(text)
         if (clean.isBlank()) return
         cancelled = false
+        log("submit chars=" + clean.length + " head=" + clean.take(40) + " queued=" + (pending.size() + 1))
         pending.offer(clean)
         if (workerStarted.compareAndSet(false, true)) {
             workerScope.launch { workerLoop() }
@@ -133,13 +140,15 @@ class VoiceReplySpeaker(private val appContext: Context) {
                 val nextText = withContext(Dispatchers.IO) { pending.poll(15, TimeUnit.SECONDS) }
                 if (nextText == null || cancelled) null else synthesizeToFile(nextText)
             }
+            log("worker: synthesised chars=" + text.length + " head=" + text.take(40) + " file=" + (audio != null))
             if (audio != null) {
                 playing = true
                 try {
-                    playBlocking(audio)
+                    runCatching { playBlocking(audio) }
                 } finally {
                     playing = false
                     audio.delete()
+                    log("worker: played chars=" + text.length)
                 }
             }
             prefetch.await()
@@ -278,7 +287,12 @@ class VoiceReplySpeaker(private val appContext: Context) {
             mp.prepare()
             mp.start()
             // 轮询而不是回调：MediaPlayer 的完成回调在非主线程上不好等，这里已经在 IO 线程
-            while (mp.isPlaying) delay(80)
+            // 播放器可能被 stop() 释放掉（关掉通话模式就是这条路径）。
+            // 对已释放的 MediaPlayer 调 isPlaying 会抛 IllegalStateException，
+            // 而这是在工作线程上，没人接就整个进程崩 —— 所以每一次轮询都要自保。
+            while (runCatching { mp.isPlaying }.getOrDefault(false)) {
+                delay(80)
+            }
         } finally {
             runCatching { mp.release() }
             if (player === mp) player = null
@@ -287,6 +301,7 @@ class VoiceReplySpeaker(private val appContext: Context) {
 
     fun stop() {
         cancelled = true
+        playing = false
         pending.clear()
         runCatching { player?.stop() }
         runCatching { player?.release() }

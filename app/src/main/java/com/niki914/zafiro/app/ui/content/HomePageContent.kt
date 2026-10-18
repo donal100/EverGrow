@@ -212,6 +212,12 @@ private var savedThinkingLevel: String? = null
  * 互斥锁保证「第一句」和「尾巴」不会同时占用播放器（Qwen 合成是并发的）。
  */
 @Volatile private var streamingTurnId = -1L
+
+/**
+ * 当前正在念这一轮的任务。必须只允许一个：否则上一轮的尾巴和新一轮的开头会同时
+ * 往队列里塞句子，播放器把它们交错念出来 —— 听感就是「念的根本不是我写的」。
+ */
+@Volatile private var streamingJob: kotlinx.coroutines.Job? = null
 @Volatile private var speechCancelled = false
 
 /**
@@ -462,9 +468,16 @@ fun HomePageContent(
         }
         val turnId = latestUiState.turns.lastOrNull()?.id ?: return@LaunchedEffect
         // 一轮只播一次（工具调用会让 isGenerating 多次翻转）
-        if (turnId == voiceLatchTurnId || turnId == streamingTurnId) return@LaunchedEffect
-        streamingTurnId = turnId
+        if (turnId == voiceLatchTurnId || turnId == streamingTurnId || turnId <= 0L) {
+            return@LaunchedEffect
+        }
+        // 新一轮开口就打断旧的：用户已经问了别的，旧回答不该继续
+        speechCancelled = true
+        runCatching { streamingJob?.cancel() }
+        voiceSpeaker.stop()
         speechCancelled = false
+        streamingTurnId = turnId
+        voiceLatchTurnId = turnId
 
         fun turnText(): String = latestUiState.turns.lastOrNull()
             ?.takeIf { it.id == turnId }
@@ -474,7 +487,7 @@ fun HomePageContent(
             ?.trim()
             .orEmpty()
 
-        voiceScope.launch {
+        streamingJob = voiceScope.launch {
             callModeController.pause()
             var spoken = 0
             var stableFor = 0
@@ -518,6 +531,7 @@ fun HomePageContent(
                 voiceSpeaker.note("stream done: turn=" + turnId + " spokenChars=" + spoken)
             } finally {
                 streamingTurnId = -1L
+                streamingJob = null
                 if (latestListenMode) callModeController.resume()
             }
         }
@@ -661,7 +675,9 @@ fun HomePageContent(
                 ),
                 PageChromeMenuItem(
                     key = "listen_mode",
-                    title = if (listenMode) "Listen mode: on" else "Listen mode: off",
+                    // 不带 on/off：这个弹层打开后不会重绘，写状态就是在撒谎。
+                    // 真实状态看 composer 里的药丸（红色 Listening）。
+                    title = "Listen mode",
                     onClick = {
                         if (latestUiState.isConfigMenuVisible) {
                             latestViewModel.sendIntent(HomeChatIntent.DismissConfigMenu)
