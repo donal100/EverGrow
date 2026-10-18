@@ -463,8 +463,7 @@ fun HomePageContent(
                             callModeController.noteSpoken(chunk)
                             speakerMutex.lock()
                             try {
-                                // 通话模式走本机引擎：省掉 1.5-2 秒合成等待
-                                runCatching { voiceSpeaker.speak(chunk, preferDevice = latestListenMode) }
+                                runCatching { voiceSpeaker.speak(chunk) }
                             } finally {
                                 speakerMutex.unlock()
                             }
@@ -487,7 +486,7 @@ fun HomePageContent(
                             callModeController.noteSpoken(rest)
                             speakerMutex.lock()
                             try {
-                                runCatching { voiceSpeaker.speak(rest, preferDevice = latestListenMode) }
+                                runCatching { voiceSpeaker.speak(rest) }
                             } finally {
                                 speakerMutex.unlock()
                             }
