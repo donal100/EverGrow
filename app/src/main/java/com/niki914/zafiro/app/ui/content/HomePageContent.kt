@@ -1,5 +1,8 @@
 package com.niki914.zafiro.app.ui.content
 
+import android.Manifest
+import android.content.pm.PackageManager
+
 import android.app.Activity
 import android.content.ClipData
 import android.content.Context
@@ -437,6 +440,26 @@ fun HomePageContent(
         }
     }
 
+    // 定位权限：py_gps 工具要靠它读原始 GPS。系统权限弹窗只能从 Activity 拉起，
+    // Python 侧拿不到 Activity，所以在顶栏菜单里留一个入口。
+    val locationContext = LocalContext.current
+    var hasLocationAccess by remember {
+        mutableStateOf(
+            locationContext.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) ==
+                PackageManager.PERMISSION_GRANTED
+        )
+    }
+    val locationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        hasLocationAccess = granted
+        Toast.makeText(
+            locationContext,
+            if (granted) "Location access granted" else "Location access denied",
+            Toast.LENGTH_SHORT,
+        ).show()
+    }
+
     LaunchedEffect(Unit) {
         latestViewModel.sendIntent(HomeChatIntent.RefreshConfigs)
     }
@@ -513,6 +536,20 @@ fun HomePageContent(
                             latestViewModel.sendIntent(HomeChatIntent.DismissConfigMenu)
                         }
                         latestViewModel.sendIntent(HomeChatIntent.ToggleVoiceMode)
+                    },
+                ),
+                PageChromeMenuItem(
+                    key = "location_access",
+                    title = if (hasLocationAccess) "Location access: on" else "Location access: off",
+                    onClick = {
+                        if (latestUiState.isConfigMenuVisible) {
+                            latestViewModel.sendIntent(HomeChatIntent.DismissConfigMenu)
+                        }
+                        if (hasLocationAccess) {
+                            Toast.makeText(locationContext, "Location already granted", Toast.LENGTH_SHORT).show()
+                        } else {
+                            locationPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+                        }
                     },
                 ),
                 PageChromeMenuItem(
