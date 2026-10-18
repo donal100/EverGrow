@@ -346,7 +346,9 @@ fun HomePageContent(
     // —— 语音播报 ——
     // 只在真的观察到「生成中→结束」之后才朗读，否则打开历史会话会把最后一条旧消息念一遍。
     // 播的是 final 文本，不是流式中间态：边生成边念会在修订时反复改口。
-    val speechOutput = remember { SpeechOutput(LocalContext.current.applicationContext) }
+    // LocalContext.current 是 @Composable 调用，不能写在 remember{} 的 lambda 里
+    val speechContext = LocalContext.current.applicationContext
+    val speechOutput = remember { SpeechOutput(speechContext) }
     var sawGenerating by remember { mutableStateOf(false) }
     DisposableEffect(Unit) {
         onDispose { speechOutput.release() }
