@@ -20,6 +20,9 @@ jobs:
   assemble:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    permissions:
+      # Release creation/asset upload needs write; everything unlisted stays none.
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -85,6 +88,31 @@ jobs:
             **/build/outputs/apk/debug/*.apk
           if-no-files-found: warn
           retention-days: 30
+
+      - name: Publish APK to rolling release
+        # Why this exists: Actions artifacts are served from Azure Blob Storage, which
+        # measured ~355 KB/s from the phone while codeload.github.com did 2.4-3.5 MB/s
+        # in the same minute, and long transfers to it drop mid-stream. A release asset
+        # comes off GitHub's normal CDN and gives a stable, guessable URL, so pulling an
+        # update no longer needs the artifact API + signed-redirect dance.
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="debug-latest"
+          APK="$(ls app/build/outputs/apk/debug/*.apk 2>/dev/null | head -n1 || true)"
+          if [ -z "${APK:-}" ] || [ ! -f "$APK" ]; then
+            echo "::warning::no debug APK produced - skipping release upload"
+            exit 0
+          fi
+          cp "$APK" evergrow-debug.apk
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" \
+            --title "Evergrow debug (latest)" \
+            --notes "Rolling debug build - the asset is overwritten on every push. Signed with ci/debug.keystore, so it updates in place over an existing install." \
+            --prerelease
+          gh release upload "$TAG" evergrow-debug.apk --clobber
+          echo "asset: https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/evergrow-debug.apk"
 
       - name: Unit tests
         run: ./gradlew testDebugUnitTest --stacktrace --no-daemon
