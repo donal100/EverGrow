@@ -1,3 +1,17 @@
+name: build
+
+# Verifies the fork compiles. No signing secrets needed for debug.
+on:
+  push:
+    branches: [ "main", "feat/**" ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  assemble:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
       - uses: actions/checkout@v4
 
       - name: Set up Python 3.11 (Chaquopy build requirement)
@@ -53,6 +67,7 @@
             **/build/outputs/apk/debug/*.apk
           if-no-files-found: warn
           retention-days: 30
+
       - name: Unit tests
         run: ./gradlew testDebugUnitTest --stacktrace --no-daemon
         continue-on-error: true
