@@ -17,8 +17,14 @@ class ScheduleReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != ACTION_FIRE) return
         val id = intent.getLongExtra(EXTRA_ID, -1L)
+        val kind = intent.getStringExtra(EXTRA_KIND) ?: "main"
         val event = ScheduleStore.findById(context, id) ?: return
-        notifyEvent(context, event)
+        if (kind == "prep") {
+            // 提前一天：只提醒「明天有个事」，事件本身还得留着
+            notifyEvent(context, event, prep = true)
+            return
+        }
+        notifyEvent(context, event, prep = false)
         if (event.optBoolean("daily")) {
             ScheduleStore.arm(context, event)
         } else {
@@ -26,7 +32,7 @@ class ScheduleReceiver : BroadcastReceiver() {
         }
     }
 
-    private fun notifyEvent(context: Context, event: JSONObject) {
+    private fun notifyEvent(context: Context, event: JSONObject, prep: Boolean) {
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             nm.createNotificationChannel(
@@ -43,11 +49,13 @@ class ScheduleReceiver : BroadcastReceiver() {
             },
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
+        val title = if (prep) "Tomorrow: " + event.optString("title", "something to prepare for")
+                    else event.optString("title", "Reminder")
         val text = event.optString("prompt").takeIf { it.isNotBlank() }
-            ?: "Tap to open Evergrow"
+            ?: if (prep) "Tap to plan it with Evergrow" else "Tap to open Evergrow"
         val n = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_popup_reminder)
-            .setContentTitle(event.optString("title", "Reminder"))
+            .setContentTitle(title)
             .setContentText(text)
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))
             .setAutoCancel(true)
@@ -59,6 +67,7 @@ class ScheduleReceiver : BroadcastReceiver() {
     companion object {
         const val ACTION_FIRE = "com.niki914.zafiro.action.SCHEDULE_FIRE"
         const val EXTRA_ID = "schedule_id"
+        const val EXTRA_KIND = "schedule_kind"
         const val EXTRA_PROMPT = "schedule_prompt"
         const val CHANNEL_ID = "schedule_reminders"
     }
