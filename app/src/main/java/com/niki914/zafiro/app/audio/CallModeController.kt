@@ -65,10 +65,13 @@ class CallModeController(
      */
     private val audio = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
 
-    /** 自己的提示音（STREAM_MUSIC 上播，不受静音系统音量影响）。 */
-    private val tone by lazy {
-        runCatching { android.media.ToneGenerator(AudioManager.STREAM_MUSIC, CUE_VOLUME) }.getOrNull()
-    }
+    private val mutedStreams = HashMap<Int, Int>()
+
+    /**
+     * 静音模式：识别器每次开麦都会响提示音，Android 没有关闭它的 API。
+     * 唯一的办法是在收音期间把系统/通知两路音量压到 0；媒体音量绝不碰，
+     * 跑步时的音乐照常放。
+     */
     private val mutedStreams = HashMap<Int, Int>()
 
     /** 同一路麦克风的备份录音：只有用户说「你听错了」时才需要它。 */
@@ -80,14 +83,7 @@ class CallModeController(
     private val restart = Runnable { startListening() }
 
     private val listener = object : RecognitionListener {
-        override fun onReadyForSpeech(params: Bundle?) {
-            log("ready")
-            // Google 自带的提示音又尖又响，而且关不掉；这里放一个很轻的短促提示，
-            // 音量压在 30%，听感像耳机里的一下轻响。
-            runCatching {
-                tone?.startTone(android.media.ToneGenerator.TONE_PROP_ACK, CUE_MS)
-            }
-        }
+        override fun onReadyForSpeech(params: Bundle?) = log("ready")
         override fun onBeginningOfSpeech() {
             recorder.markSpeechStart()
             log("speech start")
@@ -175,6 +171,7 @@ class CallModeController(
         active = true
         paused = false
         lastUtterance = ""
+        restoreCues()
         // 上一次若是异常退出，音量可能还停在 0：进来先把状态清干净
         main.post {
             if (recognizer == null) {
@@ -192,6 +189,7 @@ class CallModeController(
         active = false
         paused = false
         listening = false
+        restoreCues()
         main.removeCallbacks(restart)
         main.removeCallbacks(watchdog)
         main.post {
@@ -207,6 +205,7 @@ class CallModeController(
         if (!active || paused) return
         paused = true
         listening = false
+        restoreCues()
         main.removeCallbacks(restart)
         main.post { runCatching { recognizer?.cancel() } }
         log("pause")
@@ -258,6 +257,7 @@ class CallModeController(
         if (!active || paused || listening) return
         val r = recognizer ?: return
         listening = true
+        muteCues()
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(
                 RecognizerIntent.EXTRA_LANGUAGE_MODEL,
@@ -280,6 +280,25 @@ class CallModeController(
 
 
 
+    private fun muteCues() {
+        val am = audio ?: return
+        for (stream in intArrayOf(AudioManager.STREAM_SYSTEM, AudioManager.STREAM_NOTIFICATION)) {
+            runCatching {
+                val current = am.getStreamVolume(stream)
+                if (current > 0 && !mutedStreams.containsKey(stream)) {
+                    mutedStreams[stream] = current
+                    am.setStreamVolume(stream, 0, 0)
+                }
+            }
+        }
+    }
+
+    private fun restoreCues() {
+        val am = audio ?: return
+        mutedStreams.forEach { (stream, volume) -> runCatching { am.setStreamVolume(stream, volume, 0) } }
+        mutedStreams.clear()
+    }
+
     private fun log(msg: String) {
         runCatching {
             File(context.filesDir, "call_mode.log")
@@ -290,9 +309,6 @@ class CallModeController(
     private companion object {
         const val POST_ERROR_RESTART_MS = 350L
         const val RESUME_DELAY_MS = 900L
-        /** 提示音时长（毫秒）与音量（0-100）。 */
-        const val CUE_MS = 90
-        const val CUE_VOLUME = 30
         const val GRACE_MS = 1_500L
         const val WATCHDOG_MS = 25_000L
         const val COMPLETE_SILENCE_MS = 900L
