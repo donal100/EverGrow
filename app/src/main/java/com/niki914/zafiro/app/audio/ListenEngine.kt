@@ -36,6 +36,9 @@ class ListenEngine(
     private val recorder = UtteranceRecorder(context.filesDir)
     private val queue = ArrayBlockingQueue<ByteArray>(64)
 
+    /** 用户开口的回调：播报中用它实现「我一说话就停」。 */
+    @Volatile var onSpeechStart: (() -> Unit)? = null
+
     @Volatile private var active = false
     @Volatile private var out: FileOutputStream? = null
     private var recognizer: SpeechRecognizer? = null
@@ -136,7 +139,10 @@ class ListenEngine(
 
     private val listener = object : RecognitionListener {
         override fun onReadyForSpeech(params: Bundle?) {}
-        override fun onBeginningOfSpeech() { log("speech begins") }
+        override fun onBeginningOfSpeech() {
+            log("speech begins")
+            runCatching { onSpeechStart?.invoke() }
+        }
         override fun onRmsChanged(rmsdB: Float) {}
         override fun onBufferReceived(buffer: ByteArray?) {}
         override fun onEndOfSpeech() { log("speech ends") }

@@ -21,12 +21,17 @@ class CallModeController(
 
     fun start() {
         ListenBus.onSentence = { text -> if (!echoLikely(text)) onUtterance(text) }
+        ListenBus.onSpeechStart = {
+            // 只有真的在播报时才打断；播报结束后的正常说话不该被处理
+            if (VoiceOutbox.isBusy()) VoiceOutbox.stop()
+        }
         val intent = Intent(context, ListenService::class.java).setAction(ListenService.ACTION_START)
         runCatching { ContextCompat.startForegroundService(context, intent) }
     }
 
     fun stop() {
         ListenBus.onSentence = null
+        ListenBus.onSpeechStart = null
         runCatching { context.stopService(Intent(context, ListenService::class.java)) }
     }
 
