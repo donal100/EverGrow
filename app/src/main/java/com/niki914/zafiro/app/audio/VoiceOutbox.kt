@@ -47,6 +47,10 @@ object VoiceOutbox {
     var onSpeechIdle: (() -> Unit)? = null
 
     fun attach(context: Context) {
+        if (tuningPath == null) {
+            tuningPath = java.io.File(context.filesDir, "voice_tuning.txt").absolutePath
+            loadTuning()
+        }
         if (speaker == null) {
             speaker = VoiceReplySpeaker(context.applicationContext).also { sp ->
                 sp.onIdle = {
@@ -107,12 +111,20 @@ object VoiceOutbox {
         }
         val endsParagraph = pending.contains("\n\n") || pending.contains("\n\r")
         val endsSentence = trimmed.last() in ".!?;:。！？；：\n"
-        val longEnough = trimmed.length >= MIN_CLIP_CHARS
-        val tooLong = trimmed.length >= MAX_CLIP_CHARS
+        // 按「估计要念多久」决定，而不是按字数 —— 前者才是耳朵听到的东西。
+        val seconds = estimatedSeconds(trimmed)
+        val longEnough = seconds >= targetClipSeconds
+        val tooLong = seconds >= MAX_CLIP_SECONDS
         if (!(endsParagraph || (endsSentence && longEnough) || tooLong)) return
         pending.setLength(0)
         submitSafe(trimmed)
     }
+
+    /**
+     * 粗略估算念出来的秒数：Dylan 约 175 词/分 ≈ 每秒 15 个字符（英文含空格）。
+     * 只用来决定「够不够一段」，不需要精确。
+     */
+    private fun estimatedSeconds(text: String): Double = text.length / CHARS_PER_SECOND
 
     /** 只发「有字」的内容：纯标点、纯空白一律丢掉（TTS 会 400）。 */
     private fun submitSafe(chunk: String) {
@@ -127,11 +139,34 @@ object VoiceOutbox {
         if (text.isNotEmpty()) submitSafe(text)
     }
 
+    /** 目标片段时长（秒）。可在 filesDir/voice_tuning.txt 里用 clip_s=10 覆盖。 */
+    private var targetClipSeconds: Double = 9.0
+    private var tuningLoaded = false
+
+    private fun loadTuning() {
+        if (tuningLoaded) return
+        tuningLoaded = true
+        runCatching {
+            val f = java.io.File(tuningPath ?: return@runCatching)
+            if (!f.isFile) return@runCatching
+            f.readLines().forEach { line ->
+                val parts = line.split("=", limit = 2)
+                if (parts.size != 2) return@forEach
+                if (parts[0].trim() == "clip_s") {
+                    parts[1].trim().toDoubleOrNull()?.let { targetClipSeconds = it.coerceIn(3.0, 15.0) }
+                }
+            }
+        }
+    }
+
+    /** 由调用方在 attach() 时提供 filesDir，用于读取可调参数。 */
+    private var tuningPath: String? = null
+
     private companion object {
-        /** 一段音频至少这么长（约两句话，8-10 秒语音）才发出去，接缝更少。 */
-        const val MIN_CLIP_CHARS = 200
-        /** 上限：再长就先发，别让长回答迟迟不出声。 */
-        const val MAX_CLIP_CHARS = 420
+        /** Dylan 的语速：约 175 词/分，换算成每秒字符数。 */
+        const val CHARS_PER_SECOND = 15.0
+        /** 上限：再长就先发，别让长回答迟迟不出声（≈16 秒语音）。 */
+        const val MAX_CLIP_SECONDS = 16.0
     }
 
     /** 新一轮开始：允许把同样的文本再念一次。 */
