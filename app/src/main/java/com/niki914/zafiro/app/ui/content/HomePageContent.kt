@@ -504,8 +504,15 @@ fun HomePageContent(
             callModeController.pause()
             callModeController.setSpeaking(true)
             agentSpeaking = true
+            // liveText() 会回溯到上一条有正文的消息。开播前先等正文真的变了，
+            // 否则会先念旧回答、再发现换了文本 —— 那条旧音频就白念了。
+            var guard = 0
+            while (liveText() == lastFullySpoken && guard < 40) {
+                delay(120)
+                guard += 120
+            }
             if (liveText() == lastFullySpoken) {
-                voiceSpeaker.note("stream: text already spoken, skipping")
+                voiceSpeaker.note("stream: text unchanged, skipping")
                 return@launch
             }
             var spoken = 0
@@ -518,10 +525,9 @@ fun HomePageContent(
                     val text = liveText()
                     // 正文不再以已念过的前缀开头 = 换了一条回答：丢掉旧的，从头来
                     if (!text.startsWith(spokenPrefix)) {
-                        if (spoken > 0) {
-                            voiceSpeaker.note("stream: reply changed, restarting playback")
-                            voiceSpeaker.stop()
-                        }
+                        // 只重置计数，不调 stop()：stop() 会把 cancelled 置真，
+                        // 正在合成的那句就被迫走本机兜底（经常听起来像没出声）。
+                        if (spoken > 0) voiceSpeaker.note("stream: text changed, restarting from 0")
                         spoken = 0
                         spokenPrefix = ""
                         stableFor = 0
