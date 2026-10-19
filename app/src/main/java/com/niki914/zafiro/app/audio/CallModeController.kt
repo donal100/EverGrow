@@ -44,9 +44,14 @@ class CallModeController(
     fun listenNow() = Unit
     fun setSpeaking(speaking: Boolean) = Unit
 
+    /** 最近说过的全部文字（滚动保留），回声判断要看整体，不是最后一句。 */
+    private val recent = StringBuilder()
+
     fun noteSpoken(text: String) {
         lastSpoken = text
         lastSpokenAt = System.currentTimeMillis()
+        recent.append(" ").append(text)
+        if (recent.length > 1200) recent.delete(0, recent.length - 1200)
     }
 
     fun release() = stop()
@@ -62,7 +67,7 @@ class CallModeController(
         if (lastSpoken.isEmpty()) return false
         if (System.currentTimeMillis() - lastSpokenAt > 25_000) return false
         val h = heard.lowercase().split(Regex("[^a-z0-9\u4e00-\u9fff]+")).filter { it.length > 1 }
-        val s = lastSpoken.lowercase()
+        val s = recent.toString().lowercase()
         if (h.isEmpty()) return false
         return h.count { s.contains(it) }.toFloat() / h.size >= 0.6f
     }

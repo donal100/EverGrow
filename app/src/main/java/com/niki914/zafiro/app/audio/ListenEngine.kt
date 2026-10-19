@@ -157,16 +157,15 @@ class ListenEngine(
 
         override fun onPartialResults(partialResults: Bundle?) {
             val t = first(partialResults)
-            if (t.isNotEmpty()) {
-                currentPartial = t
-                // 识别出至少三个字才算「真的在说话」
-                if (t.length >= 3) runCatching { onSpeechStart?.invoke(t) }
-            }
+            if (t.isNotEmpty()) currentPartial = t
         }
 
         override fun onResults(results: Bundle?) {
             val t = first(results).ifEmpty { currentPartial }
             currentPartial = ""
+            // 打断用整句判断：partial 只有半个词，麦克风听见自己也会凑出一两个词，
+            // 拿它当「用户在说话」会把回答掐掉（实测一个 "here" 就停了）。
+            if (t.length >= 3) runCatching { onSpeechStart?.invoke(t) }
             if (t.length >= 2 && t != lastFinal) {
                 lastFinal = t
                 log("sentence: " + t.take(70))
