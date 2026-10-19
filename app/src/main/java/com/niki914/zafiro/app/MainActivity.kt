@@ -52,6 +52,8 @@ class MainActivity : AppCompatActivity() {
         // 每次冷启动都重排一次闹钟：更新、强停、系统清理都可能把已排的提醒弄丢，
         // 而用户预期「设过的事一定响」。
         runCatching { com.niki914.zafiro.app.schedule.ScheduleStore.rearmAll(applicationContext) }
+        // 词典随包发布：首次启动解压一次（13MB gz -> 31MB db）
+        runCatching { com.niki914.zafiro.app.dict.DictionaryInstaller.ensure(applicationContext) }
 
         val startupAssistantUi = resolveStartupAssistantUi()
         val launchDecision = runBlocking {
