@@ -73,8 +73,6 @@ class CallModeController(
         runCatching { android.media.ToneGenerator(AudioManager.STREAM_MUSIC, CUE_VOLUME) }.getOrNull()
     }
 
-    private val mutedStreams = HashMap<Int, Int>()
-
     /**
      * 静音模式：识别器每次开麦都会响提示音，Android 没有关闭它的 API。
      * 唯一的办法是在收音期间把系统/通知两路音量压到 0；媒体音量绝不碰，
