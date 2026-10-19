@@ -12,19 +12,19 @@ import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import java.io.File
 import java.io.FileOutputStream
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.TimeUnit
 
 /**
- * 听写引擎 —— 在线的、免费的、流式的。
+ * 听写引擎。规则只有一条：麦克风开着，就一直转写。
  *
- * 关键发现（实测，2026-10）：Android 的 SpeechRecognizer 其实可以「吃音频文件」——
- * 但必须同时满足三条，缺一条就只会拿到空字符串：
- *   1. 用管道（ParcelFileDescriptor.createPipe）实时喂，不能传一个已经录好的文件；
- *   2. 带上 EXTRA_SEGMENTED_SESSION，否则结果从 onResults 里拿不到；
- *   3. 文本只在 onPartialResults 里逐步出现。
- * 三条都对上之后：说话结束 50ms 后就有最终文本（5.61s 结束 → 5.66s 出结果），
- * 比 Qwen ASR 的 ~1.1s 快，而且免费离线。
+ * 之前这里堆了 pause/resume、看门狗、重启、锁 —— 每一个都在引入新的故障形态
+ * （聋掉、卡死、error=2）。现在全部删掉：
  *
- * 所以这里不做断句判断：麦克风开着就一直转写，句子边界由识别器自己给。
+ *   AudioRecord ──► 队列 ──► 写线程 ──► 管道 ──► SpeechRecognizer
+ *
+ * 不再暂停：播报期间照样转写，靠文本比对把「自己说的话」丢掉（回声由上层过滤）。
+ * 会话死了（onError）就重新开一条，没有别的状态机。
  */
 class ListenEngine(
     private val context: Context,
@@ -33,61 +33,39 @@ class ListenEngine(
 
     private val main = Handler(Looper.getMainLooper())
     private val recorder = UtteranceRecorder(context.filesDir)
-    private var recognizer: SpeechRecognizer? = null
-    private var out: FileOutputStream? = null
-    private var pfdRead: ParcelFileDescriptor? = null
-    private var pfdWrite: ParcelFileDescriptor? = null
-
-    private val queue = java.util.concurrent.ArrayBlockingQueue<ByteArray>(64)
-    private var writer: Thread? = null
+    private val queue = ArrayBlockingQueue<ByteArray>(64)
 
     @Volatile private var active = false
-    @Volatile private var paused = false
-    @Volatile private var currentPartial = ""
+    @Volatile private var out: FileOutputStream? = null
+    private var recognizer: SpeechRecognizer? = null
+    private var pfdRead: ParcelFileDescriptor? = null
+    private var pfdWrite: ParcelFileDescriptor? = null
+    private var writer: Thread? = null
+    private var currentPartial = ""
+    private var lastFinal = ""
 
     fun start() {
         if (active) return
         active = true
-        recorder.onSamples = { buf, n -> feed(buf, n) }
+        recorder.onSamples = { buf, n -> enqueue(buf, n) }
         recorder.onVoiceActivity = null
         recorder.start()
         startWriter()
         main.post { openSession() }
     }
 
-    private fun openSession() {
-        runCatching {
-            val pipe = ParcelFileDescriptor.createPipe()
-            pfdRead = pipe[0]
-            pfdWrite = pipe[1]
-            out = FileOutputStream(pfdWrite!!.fileDescriptor)
-            val r = SpeechRecognizer.createSpeechRecognizer(context)
-            r.setRecognitionListener(listener)
-            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-US")
-                putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-                putExtra(RecognizerIntent.EXTRA_SEGMENTED_SESSION, true)
-                putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE, pfdRead)
-                putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_ENCODING, AudioFormat.ENCODING_PCM_16BIT)
-                putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_SAMPLING_RATE, 16_000)
-                putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_CHANNEL_COUNT, 1)
-            }
-            r.startListening(intent)
-            recognizer = r
-            log("session open")
-        }.onFailure { log("session failed: " + it.message) }
+    fun stop() {
+        active = false
+        recorder.onSamples = null
+        recorder.stop()
+        writer?.interrupt()
+        writer = null
+        queue.clear()
+        main.post { closeSession() }
     }
 
-    /**
-     * 把麦克风样本丢进队列，由专门的写线程送进管道。
-     *
-     * 为什么不在麦克风线程里直接写：管道满时 write() 会一直阻塞，
-     * 而关闭会话要拿同一把锁 —— 主线程就被卡住，表现就是「应用卡死」。
-     * 现在写不进去就丢样本（宁可丢几十毫秒音频，也不能卡住界面）。
-     */
-    private fun feed(buf: ShortArray, n: Int) {
-        if (!active || paused) return
+    private fun enqueue(buf: ShortArray, n: Int) {
+        if (!active) return
         val bytes = ByteArray(n * 2)
         var p = 0
         for (i in 0 until n) {
@@ -95,23 +73,46 @@ class ListenEngine(
             bytes[p++] = (v and 0xFF).toByte()
             bytes[p++] = ((v shr 8) and 0xFF).toByte()
         }
-        // 队列有界：满了说明识别器跟不上，丢新样本即可
-        queue.offer(bytes)
+        queue.offer(bytes)   // 满了就丢，绝不阻塞
     }
 
     private fun startWriter() {
         if (writer != null) return
         writer = Thread {
             while (active) {
-                val bytes = runCatching { queue.poll(200, java.util.concurrent.TimeUnit.MILLISECONDS) }.getOrNull()
-                    ?: continue
+                val bytes = runCatching { queue.poll(200, TimeUnit.MILLISECONDS) }.getOrNull() ?: continue
                 val stream = out ?: continue
-                runCatching {
-                    stream.write(bytes)
-                    stream.flush()
-                }.onFailure { log("writer: " + it.message) }
+                runCatching { stream.write(bytes); stream.flush() }
+                    .onFailure { log("writer: " + it.message) }
             }
         }.also { it.isDaemon = true; it.start() }
+    }
+
+    private fun openSession() {
+        if (!active) return
+        runCatching {
+            closeSession()
+            val pipe = ParcelFileDescriptor.createPipe()
+            pfdRead = pipe[0]
+            pfdWrite = pipe[1]
+            out = FileOutputStream(pipe[1].fileDescriptor)
+            val r = SpeechRecognizer.createSpeechRecognizer(context)
+            r.setRecognitionListener(listener)
+            r.startListening(
+                Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                    putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                    putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-US")
+                    putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+                    putExtra(RecognizerIntent.EXTRA_SEGMENTED_SESSION, true)
+                    putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE, pfdRead)
+                    putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_ENCODING, AudioFormat.ENCODING_PCM_16BIT)
+                    putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_SAMPLING_RATE, 16_000)
+                    putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_CHANNEL_COUNT, 1)
+                }
+            )
+            recognizer = r
+            log("session open")
+        }.onFailure { log("open failed: " + it.message) }
     }
 
     private val listener = object : RecognitionListener {
@@ -124,80 +125,34 @@ class ListenEngine(
 
         override fun onError(error: Int) {
             log("error=" + error)
-            // 6/7 只是「这一段没听到内容」；管道还开着，继续喂即可
-            if (error == 5) restart()
+            // 任何错误都只做一件事：重开一条会话。没有别的分支。
+            if (active) main.postDelayed({ if (active) openSession() }, 300)
         }
 
         override fun onPartialResults(partialResults: Bundle?) {
-            val text = first(partialResults)
-            if (text.isNotEmpty()) currentPartial = text
+            val t = first(partialResults)
+            if (t.isNotEmpty()) currentPartial = t
         }
 
         override fun onResults(results: Bundle?) {
-            val text = first(results).ifEmpty { currentPartial }
+            val t = first(results).ifEmpty { currentPartial }
             currentPartial = ""
-            if (text.length >= 2) {
-                log("sentence: " + text.take(70))
-                main.post { onSentence(text) }
+            if (t.length >= 2 && t != lastFinal) {
+                lastFinal = t
+                log("sentence: " + t.take(70))
+                onSentence(t)
             }
         }
 
-        private fun first(bundle: Bundle?): String = runCatching {
-            bundle?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                ?.firstOrNull()?.trim().orEmpty()
+        private fun first(b: Bundle?): String = runCatching {
+            b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.trim().orEmpty()
         }.getOrDefault("")
-    }
-
-    private fun restart() {
-        closeSession()
-        if (active) main.postDelayed({ if (active) openSession() }, 250)
-    }
-
-    fun pause() {
-        paused = true
-        // 看门狗：播报失败时（请求卡住、引擎异常）没人会来调 resume，
-        // 麦克风就永远静音 —— 实测出现过「不说话了，也不再听」。
-        // 12 秒还没恢复就自己解开，宁可多听一句，不要变成聋子。
-        main.removeCallbacks(resumeGuard)
-        main.postDelayed(resumeGuard, 6_000)
-    }
-
-    fun resume() {
-        main.removeCallbacks(resumeGuard)
-        paused = false
-        currentPartial = ""
-        // 会话可能已经因为写管道失败而关掉了：恢复时顺手确认它还活着，
-        // 否则会出现「麦克风开着、识别器却不存在」——听不见任何东西。
-        if (active && recognizer == null) {
-            log("resume: no session, reopening")
-            main.post { openSession() }
-        }
-    }
-
-    private val resumeGuard = Runnable {
-        if (paused) {
-            paused = false
-            currentPartial = ""
-            log("watchdog: resumed listening after stuck pause")
-        }
-    }
-
-    fun stop() {
-        active = false
-        recorder.onSamples = null
-        recorder.stop()
-        // 先让写线程退出，再关管道：否则它会继续往已经关掉的流里写
-        writer?.interrupt()
-        writer = null
-        queue.clear()
-        closeSession()
     }
 
     private fun closeSession() {
         runCatching { out?.close() }
         out = null
-        runCatching { pfdWrite?.close() }
-        pfdWrite = null
+        queue.clear()
         runCatching { recognizer?.cancel() }
         runCatching { recognizer?.destroy() }
         recognizer = null
