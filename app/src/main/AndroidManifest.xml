@@ -60,17 +60,8 @@
 
         <!--XPOSED-->
         <meta-data
-            android:name="xposedmodule"
-            android:value="true" />
-        <meta-data
             android:name="xposedscope"
             android:resource="@array/module_scope" />
-        <meta-data
-            android:name="xposeddescription"
-            android:value="@string/xposed_desc" />
-        <meta-data
-            android:name="xposedminversion"
-            android:value="82" />
         <!--XPOSED-->
 
         <!-- 相机输出：给系统相机一个我们自己的 content uri（EXTRA_OUTPUT）。
