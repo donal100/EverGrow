@@ -36,8 +36,12 @@ class ListenEngine(
     private val recorder = UtteranceRecorder(context.filesDir)
     private val queue = ArrayBlockingQueue<ByteArray>(64)
 
-    /** 用户开口的回调：播报中用它实现「我一说话就停」。 */
-    @Volatile var onSpeechStart: (() -> Unit)? = null
+    /**
+     * 用户真的说了话的回调（带已识别的文字）。
+     * 用文字而不是「检测到声音」：后者会被咳嗽、呼吸、自己上一句的尾音触发，
+     * 实测会把刚开始播报的回答立刻掐掉。
+     */
+    @Volatile var onSpeechStart: ((String) -> Unit)? = null
 
     @Volatile private var active = false
     @Volatile private var out: FileOutputStream? = null
@@ -139,10 +143,7 @@ class ListenEngine(
 
     private val listener = object : RecognitionListener {
         override fun onReadyForSpeech(params: Bundle?) {}
-        override fun onBeginningOfSpeech() {
-            log("speech begins")
-            runCatching { onSpeechStart?.invoke() }
-        }
+        override fun onBeginningOfSpeech() { log("speech begins") }
         override fun onRmsChanged(rmsdB: Float) {}
         override fun onBufferReceived(buffer: ByteArray?) {}
         override fun onEndOfSpeech() { log("speech ends") }
@@ -156,7 +157,11 @@ class ListenEngine(
 
         override fun onPartialResults(partialResults: Bundle?) {
             val t = first(partialResults)
-            if (t.isNotEmpty()) currentPartial = t
+            if (t.isNotEmpty()) {
+                currentPartial = t
+                // 识别出至少三个字才算「真的在说话」
+                if (t.length >= 3) runCatching { onSpeechStart?.invoke(t) }
+            }
         }
 
         override fun onResults(results: Bundle?) {

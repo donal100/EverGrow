@@ -33,7 +33,7 @@ class ListenService : Service() {
         runCatching { startForeground(NOTIFICATION_ID, buildNotification()) }
         if (engine == null) {
             engine = ListenEngine(this) { text -> ListenBus.onSentence?.invoke(text) }.also {
-                it.onSpeechStart = { ListenBus.onSpeechStart?.invoke() }
+                it.onSpeechStart = { text -> ListenBus.onSpeechStart?.invoke(text) }
                 it.start()
             }
         }
@@ -75,5 +75,5 @@ class ListenService : Service() {
 /** 服务里的转写结果送出去的唯一出口。 */
 object ListenBus {
     @Volatile var onSentence: ((String) -> Unit)? = null
-    @Volatile var onSpeechStart: (() -> Unit)? = null
+    @Volatile var onSpeechStart: ((String) -> Unit)? = null
 }
