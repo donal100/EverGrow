@@ -205,6 +205,9 @@ private val listenModeState = mutableStateOf(false)
  * 发言器必须是进程级的：之前它跟着 composition 走，页面一重建 onDispose 就把
  * 后台播放线程 cancel 掉 —— 表现是「念了第一句就没了」。
  */
+/** 念话的协程作用域：进程级，页面重建不打断。 */
+private val speechScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
 private var sharedSpeaker: com.niki914.zafiro.app.audio.VoiceReplySpeaker? = null
 
 private fun speakerFor(context: android.content.Context) = sharedSpeaker
@@ -447,7 +450,7 @@ fun HomePageContent(
     // 播报不能挂在 composition 的 LaunchedEffect 上：效果随 key 重启，会把正在进行的
     // 云端合成一起取消（日志里的 "The coroutine scope left the composition" 就是这个），
     // 于是每次都被兜底的本机 TTS 抢着念 —— 听感上就是「一直重复」。给播报一条自己的命。
-    val voiceScope = remember { CoroutineScope(SupervisorJob() + Dispatchers.IO) }
+    val voiceScope = speechScope
     // —— 通话模式（Listen mode）：像打电话一样一直听着 ——
     // 用户说完一句 -> 走正常发消息链路 -> agent 回复 -> 念出来 -> 继续听。
     var listenMode by listenModeState
@@ -459,13 +462,8 @@ fun HomePageContent(
             pendingUtterance = text
         }
     }
-    DisposableEffect(Unit) {
-        onDispose {
-            voiceScope.cancel()
-            // 只停止当前播放，不销毁发言器：它要活过页面重建
-            voiceSpeaker.stop()
-        }
-    }
+    // 页面销毁什么都不做：发言器和它的作用域都是进程级的。
+    // （之前在这里 stop()/cancel()，每回合都丢掉排队中的句子。）
     // —— 语音播报：边生成边念 ——
     // 旧做法是等整段回答写完再开口，短回答也要等 4-5 秒。现在按句子切：一有完整句子
     // 就送去合成并念，生成还在继续；最后再补那句尾巴。听的感受是「它开始回话了」，
@@ -828,6 +826,11 @@ fun HomePageContent(
             if (listenMode) callModeController.resume()
         },
         listenMode = listenMode,
+        onToggleListenMode = {
+            val next = !listenMode
+            if (!next) voiceSpeaker.stop()
+            listenMode = next
+        },
         onSendClick = {
             val query = uiState.input.trim()
             val hasAttachments =
@@ -1153,6 +1156,7 @@ private fun HomePageContentBody(
     onToggleVoiceMode: () -> Unit = {},
     onInterruptSpeech: () -> Unit = {},
     listenMode: Boolean = false,
+    onToggleListenMode: () -> Unit = {},
 ) {
 
     // 底部避让总高：composer 底距 + 实测高度 + 统一视觉间距。列表贴底留白与箭头
@@ -1335,6 +1339,7 @@ private fun HomePageContentBody(
                 onToggleVoiceMode = onToggleVoiceMode,
                 onInterruptSpeech = onInterruptSpeech,
                 listenMode = listenMode,
+                onToggleListenMode = onToggleListenMode,
                 backdrop = chatBackdrop,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)

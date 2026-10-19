@@ -517,6 +517,8 @@ fun LiquidChatComposer(
     onInterruptSpeech: () -> Unit = {},
     /** 通话模式是否正在听：药丸改成醒目的「Listening」，不用翻菜单也知道状态。 */
     listenMode: Boolean = false,
+    /** 点药丸：听的时候关掉通话模式，不听的时候切换「念回复」。 */
+    onToggleListenMode: () -> Unit = {},
     backdrop: Backdrop? = null,
 ) {
     // 发送按钮恒亮：无文本点击时触发 Toast 提示，能不能点不靠颜色表达。
@@ -701,8 +703,15 @@ fun LiquidChatComposer(
                 .clip(CircleShape)
                 .background(bg)
                 .clickable {
-                    if (voiceMode) onInterruptSpeech()
-                    onToggleVoiceMode()
+                    if (listenMode) {
+                        // 药丸显示什么就切换什么：写着 Listening 就该关掉通话模式，
+                        // 而不是去动「念回复」那个开关。
+                        onInterruptSpeech()
+                        onToggleListenMode()
+                    } else {
+                        if (voiceMode) onInterruptSpeech()
+                        onToggleVoiceMode()
+                    }
                 }
                 .padding(horizontal = 14.dp, vertical = 9.dp),
             verticalAlignment = Alignment.CenterVertically,
