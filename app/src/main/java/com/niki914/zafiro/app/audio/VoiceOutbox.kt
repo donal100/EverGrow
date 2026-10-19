@@ -162,12 +162,11 @@ object VoiceOutbox {
     /** 由调用方在 attach() 时提供 filesDir，用于读取可调参数。 */
     private var tuningPath: String? = null
 
-    private companion object {
-        /** Dylan 的语速：约 175 词/分，换算成每秒字符数。 */
-        const val CHARS_PER_SECOND = 15.0
-        /** 上限：再长就先发，别让长回答迟迟不出声（≈16 秒语音）。 */
-        const val MAX_CLIP_SECONDS = 16.0
-    }
+    /** Dylan 的语速：约 175 词/分，换算成每秒字符数。 */
+    private const val CHARS_PER_SECOND = 15.0
+
+    /** 上限：再长就先发，别让长回答迟迟不出声（≈16 秒语音）。 */
+    private const val MAX_CLIP_SECONDS = 16.0
 
     /** 新一轮开始：允许把同样的文本再念一次。 */
     fun beginTurn() {
