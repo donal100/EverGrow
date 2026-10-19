@@ -605,10 +605,16 @@ fun HomePageContent(
 
         callModeController.bargeIn = hasEarphones()
         callModeController.onBargeIn = {
-            speechCancelled = true
-            voiceSpeaker.stop()
-            callModeController.setSpeaking(false)
-            callModeController.resume()
+            // 只有真的在放声音才算打断。否则这句话直接交给识别器，不能被吞掉。
+            if (!voiceSpeaker.isBusy()) {
+                false
+            } else {
+                speechCancelled = true
+                voiceSpeaker.stop()
+                callModeController.setSpeaking(false)
+                callModeController.listenNow()
+                true
+            }
         }
         voiceSpeaker.note("barge-in=" + callModeController.bargeIn)
     }

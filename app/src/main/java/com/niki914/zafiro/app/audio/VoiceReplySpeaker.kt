@@ -147,6 +147,9 @@ class VoiceReplySpeaker(private val appContext: Context) {
         }
     }
 
+    /** 现在真的有声音在放/要放吗？打断逻辑靠它判断，避免用陈旧状态误触发。 */
+    fun isBusy(): Boolean = playing || pending.isNotEmpty() || readyAudio.isNotEmpty()
+
     /** 等队列念完（调用方据此决定何时把麦克风交还通话模式）。 */
     suspend fun awaitIdle() {
         while (playing || synthBusy || pending.isNotEmpty() || readyAudio.isNotEmpty()) delay(60)

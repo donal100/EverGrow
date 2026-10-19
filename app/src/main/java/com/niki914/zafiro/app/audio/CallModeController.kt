@@ -65,8 +65,11 @@ class CallModeController(
     @Volatile
     var bargeIn = false
 
-    /** 用户开口打断时要做什么（通常是停播 + 重新开麦）。 */
-    var onBargeIn: (() -> Unit)? = null
+    /**
+     * 用户开口打断时要做什么。返回 true 表示「确实打断了」；返回 false 就按正常收音处理 ——
+     * 否则用陈旧状态误判一次，这句话就被吞掉了（用户看到的就是「听不见我」）。
+     */
+    var onBargeIn: (() -> Boolean)? = null
 
     /** agent 是否正在播报。 */
     @Volatile
@@ -200,9 +203,11 @@ class CallModeController(
                 main.post {
                     if (!active) return@post
                     if (speakingNow && bargeIn && speaking) {
-                        log("vad: user spoke while we were talking -> barge in")
-                        onBargeIn?.invoke()
-                        return@post
+                        val handled = onBargeIn?.invoke() ?: false
+                        if (handled) {
+                            log("vad: user spoke while we were talking -> barge in")
+                            return@post
+                        }
                     }
                     if (paused) return@post
                     if (speaking) {
@@ -254,6 +259,15 @@ class CallModeController(
         main.removeCallbacks(restart)
         // 不再主动开麦：VAD 检测到用户开口才开。这是「不轮询」的关键。
         log("resume")
+    }
+
+    /** 立刻开麦（打断之后用），不等下一次 VAD 上升沿。 */
+    fun listenNow() {
+        if (!active) return
+        paused = false
+        listening = false
+        ignoreUntilMs = 0L
+        main.post { startListening() }
     }
 
     /** 播报开始/结束时告诉控制器，打断逻辑靠它判断。 */
