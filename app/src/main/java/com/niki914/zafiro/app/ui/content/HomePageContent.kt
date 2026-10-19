@@ -639,7 +639,10 @@ fun HomePageContent(
                 routed == android.media.AudioDeviceInfo.TYPE_USB_HEADSET
         }.getOrDefault(false)
 
-        callModeController.bargeIn = hasEarphones()
+        // 打断暂时关闭：即使戴耳机，麦克风仍会收到足够强的信号（耳机漏音、
+        // 呼吸、环境），把正在念的回答掐掉。等有真正的回声消除再打开。
+        // 想打断时点药丸即可（只停播，不关通话模式）。
+        callModeController.bargeIn = false
         callModeController.onBargeIn = {
             // 只有真的在放声音才算打断。否则这句话直接交给识别器，不能被吞掉。
             if (!voiceSpeaker.isBusy()) {
