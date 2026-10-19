@@ -75,6 +75,9 @@ class CallModeController(
     @Volatile
     private var speakingNow = false
 
+    @Volatile
+    private var shutDown = false
+
     /**
      * 识别器每次开麦/收尾都有自己的提示音，通话模式不停地重开，于是「哔、哔、哔」。
      * Android 没有关闭它的 API，只能在我们收音期间把系统/通知两路音量压到 0 ——
@@ -104,6 +107,24 @@ class CallModeController(
     private val watchdog = Runnable { resume() }
 
     private val restart = Runnable { startListening() }
+
+    /**
+     * 电平触发的看门狗：每 250ms 看一眼「现在有没有人说话」，有就开麦。
+     * 不依赖 VAD 的上升沿 —— 那东西一旦卡住（房间一直不够安静），就再也不会触发。
+     */
+    private val tick = object : Runnable {
+        override fun run() {
+            try {
+                if (!active || shutDown) return
+                if (!paused && !listening && recorder.isLoud()) {
+                    log("tick: loud -> open recogniser")
+                    startListening()
+                }
+            } catch (_: Throwable) {
+            }
+            if (active && !shutDown) main.postDelayed(this, TICK_MS)
+        }
+    }
 
     private val listener = object : RecognitionListener {
         override fun onReadyForSpeech(params: Bundle?) {
@@ -219,6 +240,9 @@ class CallModeController(
                 }
             }
             recorder.start()
+            shutDown = false
+            main.removeCallbacks(tick)
+            main.postDelayed(tick, TICK_MS)
         }
     }
 
@@ -233,6 +257,8 @@ class CallModeController(
             runCatching { recognizer?.cancel() }
             runCatching { recognizer?.destroy() }
             recognizer = null
+            shutDown = true
+            main.removeCallbacks(tick)
             recorder.onVoiceActivity = null
             recorder.stop()
             log("stop")
@@ -361,6 +387,8 @@ class CallModeController(
     private companion object {
         const val POST_ERROR_RESTART_MS = 350L
         const val RESUME_DELAY_MS = 900L
+        /** 看门狗间隔。 */
+        const val TICK_MS = 250L
         /** 提示音：ACK，12% 音量，60ms。 */
         const val CUE_VOLUME = 12
         const val CUE_MS = 60

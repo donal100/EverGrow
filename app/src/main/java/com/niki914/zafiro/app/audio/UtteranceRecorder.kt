@@ -40,6 +40,12 @@ class UtteranceRecorder(private val filesDir: File) {
     @Volatile
     var onVoiceActivity: ((Boolean) -> Unit)? = null
 
+    /** 当前这一帧的电平（PCM16 峰值）。电平触发比边沿触发可靠：
+     *  边沿触发一旦没回到「静音」状态，就再也不会有新的「开口」事件 —— 麦克风永远不开。 */
+    @Volatile
+    var currentLevel = 0
+        private set
+
     private var speakingDetected = false
     private var aboveCount = 0
     private var belowCount = 0
@@ -87,6 +93,7 @@ class UtteranceRecorder(private val filesDir: File) {
                     val v = kotlin.math.abs(buf[i].toInt())
                     if (v > peak) peak = v
                 }
+                currentLevel = peak
                 if (peak > ENERGY_ON) {
                     aboveCount++
                     belowCount = 0
@@ -120,6 +127,9 @@ class UtteranceRecorder(private val filesDir: File) {
         record = null
         thread = null
     }
+
+    /** 现在是否有人声（电平触发用）。 */
+    fun isLoud(): Boolean = running && currentLevel > ENERGY_ON
 
     fun markSpeechStart() {
         speechStart = totalWritten
