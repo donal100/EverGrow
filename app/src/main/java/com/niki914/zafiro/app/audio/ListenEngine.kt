@@ -38,6 +38,9 @@ class ListenEngine(
     private var pfdRead: ParcelFileDescriptor? = null
     private var pfdWrite: ParcelFileDescriptor? = null
 
+    /** 管道写入与关闭必须互斥：否则会撞上 "write interrupted by close() on another thread"。 */
+    private val lock = Any()
+
     @Volatile private var active = false
     @Volatile private var paused = false
     @Volatile private var currentPartial = ""
@@ -56,7 +59,8 @@ class ListenEngine(
             val pipe = ParcelFileDescriptor.createPipe()
             pfdRead = pipe[0]
             pfdWrite = pipe[1]
-            out = FileOutputStream(pfdWrite!!.fileDescriptor)
+            val stream = FileOutputStream(pfdWrite!!.fileDescriptor)
+            synchronized(lock) { out = stream }
             val r = SpeechRecognizer.createSpeechRecognizer(context)
             r.setRecognitionListener(listener)
             val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
@@ -86,12 +90,14 @@ class ListenEngine(
             bytes[p++] = (v and 0xFF).toByte()
             bytes[p++] = ((v shr 8) and 0xFF).toByte()
         }
-        runCatching {
-            stream.write(bytes)
-            stream.flush()
-        }.onFailure {
-            log("feed failed: " + it.message)
-            restart()
+        synchronized(lock) {
+            if (out == null) return
+            runCatching {
+                stream.write(bytes)
+                stream.flush()
+            }.onFailure {
+                log("feed failed: " + it.message)
+            }
         }
     }
 
@@ -140,13 +146,19 @@ class ListenEngine(
         // 麦克风就永远静音 —— 实测出现过「不说话了，也不再听」。
         // 12 秒还没恢复就自己解开，宁可多听一句，不要变成聋子。
         main.removeCallbacks(resumeGuard)
-        main.postDelayed(resumeGuard, 12_000)
+        main.postDelayed(resumeGuard, 6_000)
     }
 
     fun resume() {
         main.removeCallbacks(resumeGuard)
         paused = false
         currentPartial = ""
+        // 会话可能已经因为写管道失败而关掉了：恢复时顺手确认它还活着，
+        // 否则会出现「麦克风开着、识别器却不存在」——听不见任何东西。
+        if (active && recognizer == null) {
+            log("resume: no session, reopening")
+            main.post { openSession() }
+        }
     }
 
     private val resumeGuard = Runnable {
@@ -165,8 +177,12 @@ class ListenEngine(
     }
 
     private fun closeSession() {
-        runCatching { out?.close() }
-        out = null
+        synchronized(lock) {
+            runCatching { out?.close() }
+            out = null
+        }
+        runCatching { pfdWrite?.close() }
+        pfdWrite = null
         runCatching { recognizer?.cancel() }
         runCatching { recognizer?.destroy() }
         recognizer = null
