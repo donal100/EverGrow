@@ -502,7 +502,20 @@ fun HomePageContent(
             agentSpeaking = true
             // 等最后一条消息长出正文（生成中最多等 6 秒）。等不到就什么都不念。
             var guard = 0
+            var logged = 0
             while (liveText().isEmpty() && guard < 50) {
+                if (guard - logged >= 1000) {
+                    logged = guard
+                    val last = latestUiState.turns.lastOrNull()
+                    val kinds = last?.blocks?.map { it.javaClass.simpleName }?.joinToString(",").orEmpty()
+                    voiceSpeaker.note(
+                        "state: turns=" + latestUiState.turns.size +
+                            " lastId=" + (last?.id ?: -1) +
+                            " blocks=[" + kinds + "]" +
+                            " userText=" + (last?.userText?.length ?: -1) +
+                            " generating=" + latestUiState.isGenerating
+                    )
+                }
                 delay(120)
                 guard += 120
             }
