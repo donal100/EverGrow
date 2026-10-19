@@ -21,9 +21,13 @@ class CallModeController(
 
     fun start() {
         ListenBus.onSentence = { text -> if (!echoLikely(text)) onUtterance(text) }
-        ListenBus.onSpeechStart = { heard ->
-            // 打断也要过回声过滤：麦克风会听见我自己，半个词就足以把回答掐掉
-            // （实测识别出一个 "here" 就停了整句）。
+        // 打断只在戴耳机时启用。
+        // 外放时麦克风必然听见喇叭，任何判断都会在「真打断」和「听见自己」之间摇摆
+        // —— 这是行业里通行的取舍：Deepgram 等给出的生产建议就是外放走半双工、
+        // 打断留给耳机。有线/蓝牙耳机都算。
+        val headphones = hasHeadphones()
+        log("barge-in=" + (if (headphones) "on" else "off") + " (headphones=" + headphones + ")")
+        ListenBus.onSpeechStart = if (!headphones) null else { heard ->
             if (VoiceOutbox.isBusy() && heard.length >= 4 && !echoLikely(heard)) {
                 log("barge-in on: " + heard.take(40))
                 VoiceOutbox.stop()
@@ -55,6 +59,18 @@ class CallModeController(
     }
 
     fun release() = stop()
+
+    /** 当前是否有耳机输出（有线/蓝牙/USB）。 */
+    private fun hasHeadphones(): Boolean = runCatching {
+        val am = context.getSystemService(android.content.Context.AUDIO_SERVICE) as android.media.AudioManager
+        am.getDevices(android.media.AudioManager.GET_DEVICES_OUTPUTS).any {
+            it.type == android.media.AudioDeviceInfo.TYPE_WIRED_HEADPHONES ||
+                it.type == android.media.AudioDeviceInfo.TYPE_WIRED_HEADSET ||
+                it.type == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
+                it.type == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+                it.type == android.media.AudioDeviceInfo.TYPE_USB_HEADSET
+        }
+    }.getOrDefault(false)
 
     private fun log(msg: String) {
         runCatching {
