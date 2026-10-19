@@ -57,6 +57,20 @@ class VoiceReplySpeaker(private val appContext: Context) {
         .readTimeout(8, TimeUnit.SECONDS)
         .build()
 
+    /** 播报前申请音频焦点：本地识别器一直占着音频，不申请会被压制。 */
+    private fun requestFocus(): Boolean = runCatching {
+        val am = appContext.getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
+        val req = android.media.AudioFocusRequest.Builder(android.media.AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+            .setAudioAttributes(
+                android.media.AudioAttributes.Builder()
+                    .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                    .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build()
+            )
+            .build()
+        am.requestAudioFocus(req) == android.media.AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+    }.getOrDefault(false)
+
     private val fallback = SpeechOutput(appContext)
     private var player: MediaPlayer? = null
 
@@ -242,6 +256,7 @@ class VoiceReplySpeaker(private val appContext: Context) {
                     .setTransferMode(AudioTrack.MODE_STREAM)
                     .build()
                 track = t
+                log("focus granted=" + requestFocus())
                 playing = true
                 // 先攒够 0.6 秒再开播：网络每抖一下就让 AudioTrack 干涸的话，
                 // 听到的就是字与字之间的「跳」。宁可晚 0.6 秒开始，声音要连续。
@@ -302,6 +317,9 @@ class VoiceReplySpeaker(private val appContext: Context) {
                     writtenFrames += tail.size / 2
                 }
                 drain(t, writtenFrames)
+                // 诊断：写进去的和真的播出去的帧数。两者差得远 = 音频被系统压掉了。
+                log("playback head=" + t.playbackHeadPosition + " writtenFrames=" + writtenFrames +
+                    " underruns=" + t.underrunCount)
                 log("stream: done chunks=" + lines + " chars=" + text.length +
                     " worstGapMs=" + worstGapMs + " jitter=" + jitter)
                 saveSample(captured.toByteArray(), text, worstGapMs, jitter, lines)
