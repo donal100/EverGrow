@@ -468,32 +468,20 @@ fun HomePageContent(
     // 页面销毁什么都不做：发言器和它的作用域都是进程级的。
     // （之前在这里 stop()/cancel()，每回合都丢掉排队中的句子。）
     // —— 语音播报：边生成边念 ——
-    // 旧做法是等整段回答写完再开口，短回答也要等 4-5 秒。现在按句子切：一有完整句子
-    // 就送去合成并念，生成还在继续；最后再补那句尾巴。听的感受是「它开始回话了」，
-    // 而不是先干等。
+    // 只看「最后一条消息的正文」，不记 turn id。之前按 id 定位，用户说话一快，
+    // 新一轮已经追加到末尾，我们就找不到该念的那段文本（spokenChars=0，
+    // 表现就是这条回答一个字都没念）。改成盯住正文本身：文本变了就重来，
+    // 变长了就接着念，天然自愈。
     LaunchedEffect(uiState.isGenerating, uiState.voiceMode, uiState.turns.size) {
         if (!uiState.isGenerating) return@LaunchedEffect
         if (!uiState.voiceMode && !latestListenMode) {
             voiceSpeaker.note("stream: generation started but voice is off")
             return@LaunchedEffect
         }
-        val turnId = latestUiState.turns.lastOrNull()?.id ?: return@LaunchedEffect
-        // 一轮只播一次（工具调用会让 isGenerating 多次翻转）
-        if (turnId == voiceLatchTurnId || turnId == streamingTurnId || turnId <= 0L) {
-            return@LaunchedEffect
-        }
-        // 新一轮开口就打断旧的：用户已经问了别的，旧回答不该继续
-        speechCancelled = true
-        runCatching { streamingJob?.cancel() }
-        voiceSpeaker.stop()
+        if (streamingJob?.isActive == true) return@LaunchedEffect
         speechCancelled = false
-        streamingTurnId = turnId
-        voiceLatchTurnId = turnId
 
-        // 必须按 id 找这一轮，而不是「最后一条」：用户说话很快时，新一轮已经
-        // 追加到列表末尾，最后一条就不再是我们要念的那一轮 —— 于是 spokenChars=0，
-        // 表现就是「这条回答一个字都没念」。
-        fun turnText(): String = latestUiState.turns.firstOrNull { it.id == turnId }
+        fun liveText(): String = latestUiState.turns.lastOrNull()
             ?.blocks
             ?.filterIsInstance<HomeChatBlock.Text>()
             ?.joinToString("\n") { it.text }
@@ -503,23 +491,33 @@ fun HomePageContent(
         streamingJob = voiceScope.launch {
             callModeController.pause()
             var spoken = 0
+            var spokenPrefix = ""
             var stableFor = 0
             try {
                 while (true) {
                     if (speechCancelled) break
                     val snapshot = latestUiState
-                    val text = turnText()
+                    val text = liveText()
+                    // 正文不再以已念过的前缀开头 = 换了一条回答：丢掉旧的，从头来
+                    if (!text.startsWith(spokenPrefix)) {
+                        if (spoken > 0) {
+                            voiceSpeaker.note("stream: reply changed, restarting playback")
+                            voiceSpeaker.stop()
+                        }
+                        spoken = 0
+                        spokenPrefix = ""
+                        stableFor = 0
+                    }
                     val cut = sentenceEnd(text, spoken)
-                    // 短句不要单独成块：一句 "Three things in it:" 播放不到 1 秒，
-                    // 而下一次合成要 1 秒出头 —— 块太小就必然露出空隙。
-                    // 攒到约 140 字符再送合成；生成结束时（不回 true）才放宽。
+                    // 短句不要单独成块：太短的块播放不到一秒，合成却要一秒多，
+                    // 必然露出空隙。攒到约 140 字符再合成；生成结束时放宽。
                     if (cut > spoken && (!snapshot.isGenerating || cut - spoken >= MIN_SPEECH_CHUNK)) {
                         val chunk = text.substring(spoken, cut).trim()
                         spoken = cut
+                        spokenPrefix = text.substring(0, spoken)
                         stableFor = 0
                         if (chunk.isNotEmpty()) {
                             callModeController.noteSpoken(chunk)
-                            // 交给流水线：当前句还在放，下一句已经开始合成，句间不留空档
                             voiceSpeaker.submit(chunk)
                         }
                         continue
@@ -527,24 +525,26 @@ fun HomePageContent(
                     if (!snapshot.isGenerating && text.length <= spoken) {
                         stableFor += 120
                         if (stableFor >= 360) break
+                    } else {
+                        stableFor = 0
                     }
                     delay(120)
                 }
 
                 // 尾巴：不足一句的部分
                 if (!speechCancelled) {
-                    val text = turnText()
+                    val text = liveText()
                     if (text.length > spoken) {
                         val rest = text.substring(spoken).trim()
                         if (rest.isNotEmpty()) {
                             callModeController.noteSpoken(rest)
                             voiceSpeaker.submit(rest)
+                            spoken = text.length
                         }
                     }
                 }
                 voiceSpeaker.awaitIdle()
-                voiceLatchTurnId = turnId
-                voiceSpeaker.note("stream done: turn=" + turnId + " spokenChars=" + spoken)
+                voiceSpeaker.note("stream done: spokenChars=" + spoken)
             } finally {
                 streamingTurnId = -1L
                 streamingJob = null
