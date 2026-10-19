@@ -48,23 +48,18 @@ class ListenEngine(
     fun start() {
         if (active) return
         active = true
-        enterCallAudio()
         recorder.onSamples = { buf, n -> enqueue(buf, n) }
         recorder.onVoiceActivity = null
-        // SCO 是异步建立的：先切模式、再挑选输入设备、最后开录音。
-        main.postDelayed({
-            if (!active) return@postDelayed
-            recorder.preferredInput = scoMic() ?: builtInMic()
-            recorder.start()
-            log("input=" + (recorder.preferredInput?.productName ?: "default"))
-        }, 600)
+        // 实测这副蓝牙耳机的麦克风拿不到（系统录音机同样如此），
+        // 所以不折腾 SCO：直接用手机麦克风，输出保持 A2DP 的高音质。
+        recorder.preferredInput = null
+        recorder.start()
         startWriter()
         main.post { openSession() }
     }
 
     fun stop() {
         active = false
-        exitCallAudio()
         recorder.onSamples = null
         recorder.stop()
         writer?.interrupt()
@@ -78,35 +73,6 @@ class ListenEngine(
      * 所以要用耳机麦，必须把设备切进通信模式并启动 SCO —— 代价是输出也变成通话音质。
      * 有线耳机不需要这一步，系统会直接用它的麦克风。
      */
-    private fun scoMic(): android.media.AudioDeviceInfo? = runCatching {
-        val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-        am.getDevices(AudioManager.GET_DEVICES_INPUTS)
-            .firstOrNull { it.type == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_SCO }
-    }.getOrNull()
-
-    private fun builtInMic(): android.media.AudioDeviceInfo? = runCatching {
-        val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-        am.getDevices(AudioManager.GET_DEVICES_INPUTS)
-            .firstOrNull { it.type == android.media.AudioDeviceInfo.TYPE_BUILTIN_MIC }
-    }.getOrNull()
-
-    private fun enterCallAudio() = runCatching {
-        val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-        if (am.isBluetoothScoAvailableOffCall) {
-            am.mode = AudioManager.MODE_IN_COMMUNICATION
-            am.startBluetoothSco()
-            @Suppress("DEPRECATION")
-            am.isBluetoothScoOn = true
-            log("sco on (headset mic)")
-        }
-    }
-
-    private fun exitCallAudio() = runCatching {
-        val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-        if (am.isBluetoothScoOn) am.stopBluetoothSco()
-        am.mode = AudioManager.MODE_NORMAL
-    }
-
     private fun enqueue(buf: ShortArray, n: Int) {
         if (!active) return
         val bytes = ByteArray(n * 2)
