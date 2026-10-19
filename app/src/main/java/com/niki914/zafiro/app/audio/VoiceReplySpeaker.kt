@@ -228,10 +228,14 @@ class VoiceReplySpeaker(private val appContext: Context) {
                     .setTransferMode(AudioTrack.MODE_STREAM)
                     .build()
                 track = t
-                t.play()
                 playing = true
+                // 先攒够 0.6 秒再开播：网络每抖一下就让 AudioTrack 干涸的话，
+                // 听到的就是字与字之间的「跳」。宁可晚 0.6 秒开始，声音要连续。
+                val preBuffer = PREBUFFER_BYTES
+                val pre = ByteArrayOutputStream()
                 var gotAudio = false
                 var lines = 0
+                var writtenFrames = 0L
                 while (!source.exhausted() && !cancelled) {
                     val line = source.readUtf8Line() ?: break
                     if (!line.startsWith("data:")) continue
@@ -246,15 +250,32 @@ class VoiceReplySpeaker(private val appContext: Context) {
                         .orEmpty()
                     if (audio.isEmpty()) continue
                     val bytes = Base64.decode(audio, Base64.DEFAULT)
-                    if (bytes.isNotEmpty()) {
-                        gotAudio = true
-                        lines++
+                    if (bytes.isEmpty()) continue
+                    gotAudio = true
+                    lines++
+                    if (t.playState != AudioTrack.PLAYSTATE_PLAYING) {
+                        pre.write(bytes)
+                        if (pre.size() >= preBuffer) {
+                            val head = pre.toByteArray()
+                            pre.reset()
+                            t.write(head, 0, head.size)
+                            writtenFrames += head.size / 2
+                            t.play()
+                        }
+                    } else {
                         t.write(bytes, 0, bytes.size)
+                        writtenFrames += bytes.size / 2
                     }
                 }
-                if (cancelled) { runCatching { t.stop() } }
-                // 让缓冲里的余音念完
-                runCatching { t.stop() }
+                // 还有没播出去的部分：先补上预缓冲里剩下的，再等播放头走完
+                if (pre.size() > 0) {
+                    val tail = pre.toByteArray()
+                    pre.reset()
+                    if (t.playState != AudioTrack.PLAYSTATE_PLAYING) t.play()
+                    t.write(tail, 0, tail.size)
+                    writtenFrames += tail.size / 2
+                }
+                drain(t, writtenFrames)
                 log("stream: done chunks=" + lines + " chars=" + text.length)
                 if (!gotAudio) return false
                 val hook = onIdle
@@ -268,6 +289,22 @@ class VoiceReplySpeaker(private val appContext: Context) {
             playing = false
             runCatching { track?.release() }
             track = null
+        }
+    }
+
+    /**
+     * 等 AudioTrack 把写入的帧真的播完再停。
+     * 之前直接 stop()，缓冲区里最后那几百毫秒被丢掉 —— 听感上就是句尾被切。
+     */
+    private fun drain(t: AudioTrack, writtenFrames: Long) {
+        runCatching {
+            val deadline = System.currentTimeMillis() + 30_000
+            while (!cancelled && System.currentTimeMillis() < deadline) {
+                val played = t.playbackHeadPosition.toLong() and 0xFFFFFFFFL
+                if (played >= writtenFrames) break
+                Thread.sleep(40)
+            }
+            runCatching { t.stop() }
         }
     }
 
@@ -512,6 +549,8 @@ class VoiceReplySpeaker(private val appContext: Context) {
         private const val STREAM_ENDPOINT =
             "https://maas.qwencloudapi.com/compatible-mode/v1/chat/completions"
         private const val STREAM_MODEL = "qwen3.5-omni-plus"
+        /** 24kHz 16bit 单声道：0.6 秒 ≈ 28800 字节 */
+        private const val PREBUFFER_BYTES = 28_800
         private const val ENDPOINT =
             "https://maas.qwencloudapi.com/api/v1/services/aigc/multimodal-generation/generation"
         private const val MODEL = "qwen3-tts-flash"
