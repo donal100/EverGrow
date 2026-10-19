@@ -1,6 +1,7 @@
 package com.niki914.zafiro.app.audio
 
 import android.content.Context
+import android.media.AudioManager
 import android.content.Intent
 import android.media.AudioFormat
 import android.os.Bundle
@@ -47,6 +48,7 @@ class ListenEngine(
     fun start() {
         if (active) return
         active = true
+        enterCallAudio()
         recorder.onSamples = { buf, n -> enqueue(buf, n) }
         recorder.onVoiceActivity = null
         recorder.start()
@@ -56,12 +58,35 @@ class ListenEngine(
 
     fun stop() {
         active = false
+        exitCallAudio()
         recorder.onSamples = null
         recorder.stop()
         writer?.interrupt()
         writer = null
         queue.clear()
         main.post { closeSession() }
+    }
+
+    /**
+     * 蓝牙耳机的麦克风只走 SCO（通话通道），A2DP 只负责放音。
+     * 所以要用耳机麦，必须把设备切进通信模式并启动 SCO —— 代价是输出也变成通话音质。
+     * 有线耳机不需要这一步，系统会直接用它的麦克风。
+     */
+    private fun enterCallAudio() = runCatching {
+        val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        if (am.isBluetoothScoAvailableOffCall) {
+            am.mode = AudioManager.MODE_IN_COMMUNICATION
+            am.startBluetoothSco()
+            @Suppress("DEPRECATION")
+            am.isBluetoothScoOn = true
+            log("sco on (headset mic)")
+        }
+    }
+
+    private fun exitCallAudio() = runCatching {
+        val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        if (am.isBluetoothScoOn) am.stopBluetoothSco()
+        am.mode = AudioManager.MODE_NORMAL
     }
 
     private fun enqueue(buf: ShortArray, n: Int) {
