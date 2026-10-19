@@ -82,6 +82,10 @@ class CallModeController(
     @Volatile
     private var tickCooldownUntil = 0L
 
+    /** 打断阈值（拍数），可在 voice_tuning.txt 里覆盖。 */
+    @Volatile
+    private var bargeInTicks = BARGE_IN_TICKS
+
     /**
      * 识别器每次开麦/收尾都有自己的提示音，通话模式不停地重开，于是「哔、哔、哔」。
      * Android 没有关闭它的 API，只能在我们收音期间把系统/通知两路音量压到 0 ——
@@ -136,7 +140,7 @@ class CallModeController(
                 // 打断必须非常保守：连续 20 拍（20 × 250ms ≈ 5 秒）强信号才算数。
                 // 代价是要一直说上五秒才会打断；好处是外放回声、关门声、背景噪声
                 // 都不可能掐掉一条正在念的回答。
-                if (speakingNow && bargeIn && spikeTicks >= BARGE_IN_TICKS) {
+                if (speakingNow && bargeIn && spikeTicks >= bargeInTicks) {
                     val handled = onBargeIn?.invoke() ?: false
                     if (handled) {
                         log("tick: barge in (floor=" + recorder.floor() + ")")
@@ -239,8 +243,34 @@ class CallModeController(
         }
     }
 
+    /**
+     * 用户可调参数放在 filesDir/voice_tuning.txt，形如：
+     *   barge_in=off
+     *   ticks=40
+     *   energy_on=1200
+     * 每次打开通话模式重读一次 —— 改行为不用重新编译。
+     */
+    private fun applyTuning() {
+        val f = java.io.File(context.filesDir, "voice_tuning.txt")
+        if (!f.isFile) return
+        runCatching {
+            f.readText().lineSequence().forEach { line ->
+                val parts = line.split("=", limit = 2)
+                if (parts.size != 2) return@forEach
+                val key = parts[0].trim()
+                val value = parts[1].trim()
+                when (key) {
+                    "barge_in" -> bargeIn = value.equals("on", true)
+                    "ticks" -> value.toIntOrNull()?.let { bargeInTicks = it.coerceIn(2, 200) }
+                }
+            }
+            log("tuning: bargeIn=" + bargeIn + " ticks=" + bargeInTicks)
+        }
+    }
+
     fun start() {
         if (active) return
+        applyTuning()
         active = true
         paused = false
         lastUtterance = ""
