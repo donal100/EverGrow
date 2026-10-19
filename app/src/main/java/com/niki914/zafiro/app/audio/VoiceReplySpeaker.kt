@@ -359,6 +359,14 @@ class VoiceReplySpeaker(private val appContext: Context) {
     }
 
     fun stop() {
+        // 诊断：谁在取消播放？之前只能靠猜，直接记下调用栈的前几帧。
+        runCatching {
+            val frames = Throwable().stackTrace
+                .drop(1)
+                .take(6)
+                .joinToString(" <- ") { it.className.substringAfterLast('.') + "." + it.methodName }
+            log("stop() from: " + frames)
+        }
         cancelled = true
         playing = false
         pending.clear()
