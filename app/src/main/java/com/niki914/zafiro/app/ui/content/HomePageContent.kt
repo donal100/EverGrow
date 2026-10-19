@@ -532,6 +532,8 @@ fun HomePageContent(
         val justFinished = wasGenerating && !uiState.isGenerating
         wasGenerating = uiState.isGenerating
         if (justFinished) {
+            // 回合结束了：把还没念完的尾巴发出去，再等它念完才恢复收音
+            outbox.flush()
             kotlinx.coroutines.delay(400)
             if (!outbox.isBusy()) callModeController.resume()
         }

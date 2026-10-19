@@ -28,9 +28,18 @@ object VoiceOutbox {
     /** 上一次已经交给 TTS 的全文，用来算增量。 */
     private var lastFull: String = ""
 
+    /**
+     * 还没念出去的增量。流式回答是一小片一小片来的，直接送进 TTS 会把句子切碎：
+     * 实测「Berlin」先到，随后到的是「.」，那个句号自己进去就变成了一句「dot」
+     * （Qwen 对纯标点直接 400，于是兜底的本机 TTS 把句号念了出来）。
+     * 所以先攒着，遇到句子结束符或够长了才发。
+     */
+    private val pending = StringBuilder()
+
     /** 用户按下按钮时调用：立刻停声并清空记忆，下一次回答从头念。 */
     fun stop() {
         speaker?.stop()
+        pending.setLength(0)
         lastFull = ""
     }
 
@@ -75,14 +84,40 @@ object VoiceOutbox {
             else -> clean          // 文本被替换（短回答常见）
         }
         lastFull = clean
-        val chunk = fresh.trim()
-        if (chunk.isEmpty()) return
-        val sp = speaker ?: return
-        sp.submit(chunk)
+        pending.append(fresh)
+        maybeFlush()
+    }
+
+    /** 攒够了才发：句末标点，或者长到不适合再等。 */
+    private fun maybeFlush() {
+        val text = pending.toString()
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) {
+            pending.setLength(0)
+            return
+        }
+        val endsSentence = trimmed.last() in ".!?;:。！？；：\n"
+        if (!endsSentence && trimmed.length < 160) return
+        pending.setLength(0)
+        submitSafe(trimmed)
+    }
+
+    /** 只发「有字」的内容：纯标点、纯空白一律丢掉（TTS 会 400）。 */
+    private fun submitSafe(chunk: String) {
+        if (chunk.none { it.isLetterOrDigit() }) return
+        speaker?.submit(chunk)
+    }
+
+    /** 回合结束：把攒着的尾巴念掉。 */
+    fun flush() {
+        val text = pending.toString().trim()
+        pending.setLength(0)
+        if (text.isNotEmpty()) submitSafe(text)
     }
 
     /** 新一轮开始：允许把同样的文本再念一次。 */
     fun beginTurn() {
+        pending.setLength(0)
         lastFull = ""
     }
 }
