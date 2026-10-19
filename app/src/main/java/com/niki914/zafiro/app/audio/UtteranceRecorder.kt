@@ -130,6 +130,9 @@ class UtteranceRecorder(private val filesDir: File) {
                     }
                     totalWritten += n
                 }
+                // 转写引擎的入口：同一个 AudioRecord 的样本分一份给它，
+                // 不再开第二个录音器（两个 AudioRecord 会互相抢麦克风）。
+                runCatching { onSamples?.invoke(buf, n) }
                 // 滚动存档（默认最近 5 分钟，10 秒一个文件），只写盘，不参与识别。
                 // 好处：识别器晚开/听错/没反应时，事后还能从磁盘上重听那几秒。
                 archiveCopy(buf, n)
@@ -196,6 +199,10 @@ class UtteranceRecorder(private val filesDir: File) {
             if (stamp < cutoff) runCatching { f.delete() }
         }
     }
+
+    /** 原始样本回调：给实时转写引擎喂数据用。 */
+    @Volatile
+    var onSamples: ((ShortArray, Int) -> Unit)? = null
 
     /** VAD 判定的开口位置（帧计数），比识别器早，用于存盘时保住句首。 */
     private var vadStart = -1L
