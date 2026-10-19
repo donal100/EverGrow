@@ -53,6 +53,8 @@ class TranslateSession(
             return
         }
         record = rec
+        // 插着耳机时系统默认会选耳机麦克风，但这里要的是手机自己的麦克风
+        runCatching { AudioRouter.builtInMic(ctx)?.let { rec.setPreferredDevice(it) } }
         runCatching {
             if (AcousticEchoCanceler.isAvailable()) {
                 aec = AcousticEchoCanceler.create(rec.audioSessionId)?.also { it.enabled = true }

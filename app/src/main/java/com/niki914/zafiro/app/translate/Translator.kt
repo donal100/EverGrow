@@ -1,6 +1,7 @@
 package com.niki914.zafiro.app.translate
 
 import android.content.Context
+import android.util.Base64
 import com.niki914.zafiro.app.audio.QwenAsrClient
 import com.niki914.zafiro.app.audio.VoiceReplySpeaker
 import kotlinx.coroutines.CoroutineScope
@@ -17,13 +18,16 @@ import java.io.File
 import java.util.concurrent.TimeUnit
 
 /**
- * 双向口译：说中文 -> 出英文，说英文 -> 出中文。
+ * 口译。两种模式：
  *
- * 一路实测耗时（2026-10）：ASR ≈1.1s、翻译 ≈0.9s、Qwen 合成 ≈1.9s，
- * 也就是说完到听见译文约 4 秒。这个数字决定了它「能用但不算快」。
+ *  - "two-way"：说中文出英文、说英文出中文。方向靠转写文本的字符集判断，
+ *    走「ASR + 翻译」两步（实测 1.1 + 0.6 ≈ 1.7s）。
+ *  - "to-english" / "to-chinese"：方向锁死，走 qwen3-livetranslate-flash
+ *    单次调用（音频直接出译文，实测 ≈1.2s）。锁定模式下把声音路由到耳机、
+ *    麦克风坚持用手机自带的 —— 免提时喇叭不进麦克风，回声问题从根上消失。
  *
- * 为什么不问 agent：整条链路里不需要模型做任何判断——脚本检测语言、
- * 固定方向翻译。让 agent 参与只会多一层延迟。
+ * 为什么锁定模式不用两步：目标语言已知，一次调用就够，少一跳网络。
+ * 为什么双向不能单次：target_lang 不支持 auto，不知道对方说什么就无法预先指定。
  */
 object Translator {
 
@@ -34,29 +38,37 @@ object Translator {
         .build()
     private val JSON = "application/json".toMediaType()
 
+    private const val BASE = "https://maas.qwencloudapi.com"
+    private const val TRANSLATE_MODEL = "qwen3-livetranslate-flash"
+
     @Volatile private var appCtx: Context? = null
     @Volatile private var session: TranslateSession? = null
     @Volatile private var speaker: VoiceReplySpeaker? = null
     @Volatile private var busy = false
+    @Volatile private var direction: String = "two-way"
+    @Volatile private var routing: String = "speaker"
 
-    /** 最近一条原文/译文，供 UI 或状态查询显示。 */
     @Volatile var lastHeard: String = ""
     @Volatile var lastTranslated: String = ""
 
     val isRunning: Boolean get() = session != null
+    val mode: String get() = direction
+    val audioRoute: String get() = routing
 
-    fun start(ctx: Context) {
+    fun start(ctx: Context, dir: String = "two-way") {
         if (session != null) return
         val app = ctx.applicationContext
         appCtx = app
+        direction = dir
         if (speaker == null) speaker = VoiceReplySpeaker(app)
-        val recorder = QwenAsrClient(File(app.filesDir, "qwen_asr_key.txt"))
+        routing = if (dir == "two-way") "speaker" else AudioRouter.routeToEarphones(app)
+        val asr = QwenAsrClient(File(app.filesDir, "qwen_asr_key.txt"))
         session = TranslateSession(app) { file ->
             if (busy) return@TranslateSession
             busy = true
             scope.launch {
                 try {
-                    translateTurn(app, recorder, file)
+                    translateTurn(asr, file)
                 } finally {
                     busy = false
                     runCatching { file.delete() }
@@ -69,42 +81,38 @@ object Translator {
         session?.stop()
         session = null
         speaker?.stop()
+        appCtx?.let { AudioRouter.reset(it) }
+        routing = "speaker"
         busy = false
     }
 
-    private suspend fun translateTurn(app: Context, recorder: QwenAsrClient, wav: File) {
-        val heard = recorder.transcribe(wav).getOrNull()?.trim().orEmpty()
-        if (heard.length < 2) return
-        lastHeard = heard
-        val toEnglish = Regex("[\\u4e00-\\u9fff]").containsMatchIn(heard)
-        val target = if (toEnglish) "English" else "Simplified Chinese"
-        val translated = translate(heard, target) ?: return
+    private suspend fun translateTurn(asr: QwenAsrClient, wav: File) {
+        val translated = when (direction) {
+            "to-english" -> single(b64(wav), "en")
+            "to-chinese" -> single(b64(wav), "zh")
+            else -> twoStage(asr, wav)
+        } ?: return
         lastTranslated = translated
         session?.pause()
         speaker?.submit(translated)
-        // 等念完再恢复收音：半双工，外放的译文绝不会被自己听成「有人说话」
         speaker?.awaitIdle()
         session?.resume()
     }
 
-    private fun translate(text: String, target: String): String? {
-        val app = appCtx ?: return null
-        val keyFile = File(app.filesDir, "deepseek_key.txt")
-        val key = runCatching { keyFile.readText().trim() }.getOrNull().orEmpty()
-        if (key.isEmpty()) return null
+    /** 锁定方向：音频直接进翻译模型，一次网络往返。 */
+    private fun single(audioB64: String, target: String): String? {
+        val key = key() ?: return null
         val body = JSONObject()
-            .put("model", "deepseek-flash")
-            .put("messages", JSONArray().put(JSONObject()
-                .put("role", "user")
-                .put("content", "Translate into $target. Output only the translation, no notes: " + text)))
-            .put("max_tokens", 400)
-            .put("reasoning_effort", "none")
+            .put("model", TRANSLATE_MODEL)
+            .put("translation_options", JSONObject().put("source_lang", "auto").put("target_lang", target))
+            .put("max_tokens", 600)
+            .put("messages", JSONArray().put(JSONObject().put("role", "user").put("content",
+                JSONArray().put(JSONObject().put("type", "input_audio")
+                    .put("input_audio", JSONObject().put("data", "data:audio/wav;base64," + audioB64))))))
             .toString()
-        val req = Request.Builder()
-            .url("https://api.deepseek.com/chat/completions")
+        val req = Request.Builder().url(BASE + "/compatible-mode/v1/chat/completions")
             .addHeader("Authorization", "Bearer " + key)
-            .post(body.toRequestBody(JSON))
-            .build()
+            .post(body.toRequestBody(JSON)).build()
         return runCatching {
             http.newCall(req).execute().use { resp ->
                 val raw = resp.body?.string().orEmpty()
@@ -113,5 +121,47 @@ object Translator {
                     .getJSONObject("message").optString("content").trim().takeIf { it.isNotEmpty() }
             }
         }.getOrNull()
+    }
+
+    /** 双向：先转写判断语言，再翻译。 */
+    private suspend fun twoStage(asr: QwenAsrClient, wav: File): String? {
+        val heard = asr.transcribe(wav).getOrNull()?.trim().orEmpty()
+        if (heard.length < 2) return null
+        lastHeard = heard
+        val toEnglish = Regex("[\\u4e00-\\u9fff]").containsMatchIn(heard)
+        return translateText(heard, if (toEnglish) "English" else "Simplified Chinese")
+    }
+
+    private fun translateText(text: String, target: String): String? {
+        val app = appCtx ?: return null
+        val keyFile = File(app.filesDir, "deepseek_key.txt")
+        val key = runCatching { keyFile.readText().trim() }.getOrNull().orEmpty()
+        if (key.isEmpty()) return null
+        val body = JSONObject()
+            .put("model", "deepseek-flash")
+            .put("messages", JSONArray().put(JSONObject().put("role", "user")
+                .put("content", "Translate into $target. Output only the translation, no notes: " + text)))
+            .put("max_tokens", 400)
+            .put("reasoning_effort", "none")
+            .toString()
+        val req = Request.Builder().url("https://api.deepseek.com/chat/completions")
+            .addHeader("Authorization", "Bearer " + key)
+            .post(body.toRequestBody(JSON)).build()
+        return runCatching {
+            http.newCall(req).execute().use { resp ->
+                val raw = resp.body?.string().orEmpty()
+                if (!resp.isSuccessful) return@use null
+                JSONObject(raw).getJSONArray("choices").getJSONObject(0)
+                    .getJSONObject("message").optString("content").trim().takeIf { it.isNotEmpty() }
+            }
+        }.getOrNull()
+    }
+
+    private fun b64(f: File): String =
+        Base64.encodeToString(f.readBytes(), Base64.NO_WRAP)
+
+    private fun key(): String? {
+        val app = appCtx ?: return null
+        return runCatching { File(app.filesDir, "qwen_asr_key.txt").readText().trim() }.getOrNull()
     }
 }
