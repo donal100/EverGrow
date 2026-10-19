@@ -236,6 +236,10 @@ class VoiceReplySpeaker(private val appContext: Context) {
                 var gotAudio = false
                 var lines = 0
                 var writtenFrames = 0L
+                val captured = ByteArrayOutputStream()
+                var lastChunkAt = 0L
+                var worstGapMs = 0L
+                var jitter = 0
                 while (!source.exhausted() && !cancelled) {
                     val line = source.readUtf8Line() ?: break
                     if (!line.startsWith("data:")) continue
@@ -253,6 +257,14 @@ class VoiceReplySpeaker(private val appContext: Context) {
                     if (bytes.isEmpty()) continue
                     gotAudio = true
                     lines++
+                    captured.write(bytes)
+                    // 网络抖动诊断：相邻音频块之间空太久，播放就会干涸
+                    val now = System.currentTimeMillis()
+                    if (lastChunkAt > 0) {
+                        val gap = now - lastChunkAt
+                        if (gap > 120) { jitter++; if (gap > worstGapMs) worstGapMs = gap }
+                    }
+                    lastChunkAt = now
                     if (t.playState != AudioTrack.PLAYSTATE_PLAYING) {
                         pre.write(bytes)
                         if (pre.size() >= preBuffer) {
@@ -276,7 +288,9 @@ class VoiceReplySpeaker(private val appContext: Context) {
                     writtenFrames += tail.size / 2
                 }
                 drain(t, writtenFrames)
-                log("stream: done chunks=" + lines + " chars=" + text.length)
+                log("stream: done chunks=" + lines + " chars=" + text.length +
+                    " worstGapMs=" + worstGapMs + " jitter=" + jitter)
+                saveSample(captured.toByteArray(), text, worstGapMs, jitter, lines)
                 if (!gotAudio) return false
                 val hook = onIdle
                 if (hook != null && pending.isEmpty()) runCatching { hook() }
@@ -551,6 +565,8 @@ class VoiceReplySpeaker(private val appContext: Context) {
         private const val STREAM_MODEL = "qwen3.5-omni-plus"
         /** 24kHz 16bit 单声道：0.6 秒 ≈ 28800 字节 */
         private const val PREBUFFER_BYTES = 28_800
+        /** 保留最近几段合成音频，供事后分析 */
+        private const val SAMPLE_KEEP = 12
         private const val ENDPOINT =
             "https://maas.qwencloudapi.com/api/v1/services/aigc/multimodal-generation/generation"
         private const val MODEL = "qwen3-tts-flash"
