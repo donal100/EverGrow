@@ -148,6 +148,7 @@ class VoiceReplySpeaker(private val appContext: Context) {
     private suspend fun synthLoop() {
         while (workerScope.isActive) {
             val text = withContext(Dispatchers.IO) { pending.poll(1, TimeUnit.SECONDS) } ?: continue
+            log("synth: take chars=" + text.length + " active=" + workerScope.isActive + " cancelled=" + cancelled)
             if (cancelled) continue
             val audio = synthesizeToFile(text) ?: continue
             log("synth: ready chars=" + text.length + " head=" + text.take(32) + " pending=" + pending.size)
@@ -179,13 +180,14 @@ class VoiceReplySpeaker(private val appContext: Context) {
 
     /** 合成到文件；失败返回 null（这时退回本机 TTS 直接念，宁可音色差也别哑巴）。 */
     private suspend fun synthesizeToFile(text: String): File? = withContext(Dispatchers.IO) {
-        runCatching { speakWithQwen(text, returnFile = true) }
-            .getOrNull()
-            ?.let { path -> File(path).takeIf { it.isFile } }
-            ?: run {
-                if (!cancelled) fallback.speak(text)
-                null
-            }
+        val result = runCatching { speakWithQwen(text, returnFile = true) }
+        result.exceptionOrNull()?.let { log("synth: FAILED " + (it.message ?: it.javaClass.simpleName)) }
+        val file = result.getOrNull()?.let { path -> File(path).takeIf { it.isFile } }
+        if (file == null) {
+            log("synth: falling back to device TTS")
+            if (!cancelled) fallback.speak(text)
+        }
+        file
     }
 
     /** 截掉首尾的静音：云合成给的 wav 两端各带几十毫秒空白，句句加起来就是可听见的顿挫。 */
