@@ -911,6 +911,22 @@ fun HomePageContent(
         },
         listenMode = listenMode,
         agentSpeaking = agentSpeaking,
+        onPillTap = {
+            if (listenMode && voiceSpeaker.isBusy()) {
+                // 正在念：只停播，通话模式保持开启
+                speechCancelled = true
+                voiceSpeaker.stop()
+                callModeController.listenNow()
+            } else if (listenMode) {
+                // 已经安静：关掉通话模式
+                voiceSpeaker.stop()
+                listenMode = false
+            } else {
+                // 没在听：按原来的语义切换「念回复」
+                if (uiState.voiceMode) runCatching { voiceSpeaker.stop() }
+                latestViewModel.sendIntent(HomeChatIntent.ToggleVoiceMode)
+            }
+        },
         onToggleListenMode = {
             val next = !listenMode
             if (!next) voiceSpeaker.stop()
@@ -1243,6 +1259,7 @@ private fun HomePageContentBody(
     listenMode: Boolean = false,
     onToggleListenMode: () -> Unit = {},
     agentSpeaking: Boolean = false,
+    onPillTap: () -> Unit = {},
 ) {
 
     // 底部避让总高：composer 底距 + 实测高度 + 统一视觉间距。列表贴底留白与箭头
@@ -1427,6 +1444,7 @@ private fun HomePageContentBody(
                 listenMode = listenMode,
                 onToggleListenMode = onToggleListenMode,
                 agentSpeaking = agentSpeaking,
+                onPillTap = onPillTap,
                 backdrop = chatBackdrop,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
