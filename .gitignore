@@ -54,3 +54,5 @@ pnpm-debug.log*
 packing/
 media/
 nexus-res/
+# local user-specific agent notes
+agent/local.md

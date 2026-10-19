@@ -1,0 +1,7 @@
+# Local agent notes (not committed)
+
+Put user-specific preferences here: tone, response length, which features matter, personal
+conventions, anything that would be wrong for another user.
+
+This file is gitignored on purpose - the repository carries what is true for everyone,
+your local copy carries what is true for you.

@@ -171,3 +171,24 @@ AI 对话通常是以 list 的形式存放 messages，同时只会有一个对�
 
 - 单元测试: 写或修改单测前调用 `test-triage`；测试执行超过 30s 或疑似挂起时调用 `test-hang-watchdog`
 - 发版: 准备发布新版本时使用 `release-new-version`
+
+---
+
+## Evergrow 语音栈的坑（对所有使用者都成立）
+
+这些是踩出来的、别人会重复踩的东西，写在仓库里而不是某个人的笔记里。
+
+- **Android 的 SpeechRecognizer 能吃音频**，但必须三条同时满足：实时写入
+  `ParcelFileDescriptor.createPipe()`（传成品文件只会得到空字符串）、
+  `EXTRA_SEGMENTED_SESSION=true`、文本从 `onPartialResults` 取。
+  实测：说话结束 5.61s，最终文本 5.66s。见 `docs/android-offline-asr-from-audio.md`。
+- **一次识别会话只交付一句话**，之后自己结束；每句之后必须重开，否则第二句永远听不到。
+- **不要在 onEndOfSpeech 里把 listening 置 false**：识别器还在处理，此时重开会让半句丢失。
+- **AudioTrack 会被静默吞掉**：本地识别器占着音频栈时，写入帧数正常、播放头不动（head=0）。
+  要出声就用 MediaPlayer 播临时 wav。
+- **任何“什么也没发生”都要有数字**：播放头、写入帧数、underrun，否则只能靠猜。
+- **打断只在戴耳机时启用**：外放时麦克风必然听见喇叭，任何阈值都在“漏打断”和“自己打断自己”之间摇摆。
+- **安装新 APK 会清掉所有 AlarmManager 闹钟**：必须处理 `MY_PACKAGE_REPLACED` 并重新排。
+- **自定义 Python 工具改完不一定立刻生效**：模块可能还是旧的，验证时看输出字段有没有变化。
+- **CI 失败的默认态**：push 之后要自己确认 assemble 成功，否则“修好了”的提交可能从未编译。
+- **写文件前先确认锚点真的存在**：一次字符串替换匹配到注释里，权限行没写进去，但检查也过了。
