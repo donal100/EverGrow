@@ -504,15 +504,17 @@ fun HomePageContent(
             callModeController.pause()
             callModeController.setSpeaking(true)
             agentSpeaking = true
-            // liveText() 会回溯到上一条有正文的消息。开播前先等正文真的变了，
-            // 否则会先念旧回答、再发现换了文本 —— 那条旧音频就白念了。
+            // 以「开播那一刻屏幕上已有的正文」为基线（那通常是上一条回答），
+            // 一直等到正文真的变了才开口。用 lastFullySpoken 当基线不行：
+            // 它可能是空的（刚启动/上一条没念过），于是会直接把旧回答念出来。
+            val baseline = liveText()
             var guard = 0
-            while (liveText() == lastFullySpoken && guard < 40) {
+            while (liveText() == baseline && guard < 50) {
                 delay(120)
                 guard += 120
             }
-            if (liveText() == lastFullySpoken) {
-                voiceSpeaker.note("stream: text unchanged, skipping")
+            if (liveText() == baseline) {
+                voiceSpeaker.note("stream: no new text yet, skipping")
                 return@launch
             }
             var spoken = 0
