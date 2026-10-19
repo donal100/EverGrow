@@ -519,6 +519,8 @@ fun LiquidChatComposer(
     listenMode: Boolean = false,
     /** 点药丸：听的时候关掉通话模式，不听的时候切换「念回复」。 */
     onToggleListenMode: () -> Unit = {},
+    /** agent 正在播报。此时点药丸只是「别说了」，不该顺手关掉通话模式。 */
+    agentSpeaking: Boolean = false,
     backdrop: Backdrop? = null,
 ) {
     // 发送按钮恒亮：无文本点击时触发 Toast 提示，能不能点不靠颜色表达。
@@ -703,7 +705,11 @@ fun LiquidChatComposer(
                 .clip(CircleShape)
                 .background(bg)
                 .clickable {
-                    if (listenMode) {
+                    // 先说「别念了」，再说「关掉通话模式」：一次点击只做一件事，
+                    // 否则用户想打断，结果把麦克风也关了 —— 就是刚才发生的事。
+                    if (listenMode && agentSpeaking) {
+                        onInterruptSpeech()
+                    } else if (listenMode) {
                         // 药丸显示什么就切换什么：写着 Listening 就该关掉通话模式，
                         // 而不是去动「念回复」那个开关。
                         onInterruptSpeech()

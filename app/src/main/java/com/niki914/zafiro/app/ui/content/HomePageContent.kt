@@ -491,6 +491,7 @@ fun HomePageContent(
         streamingJob = voiceScope.launch {
             callModeController.pause()
             callModeController.setSpeaking(true)
+            agentSpeaking = true
             var spoken = 0
             var spokenPrefix = ""
             var stableFor = 0
@@ -547,6 +548,7 @@ fun HomePageContent(
                 voiceSpeaker.awaitIdle()
                 voiceSpeaker.note("stream done: spokenChars=" + spoken)
             } finally {
+                agentSpeaking = false
                 callModeController.setSpeaking(false)
                 streamingTurnId = -1L
                 streamingJob = null
@@ -584,6 +586,9 @@ fun HomePageContent(
             latestViewModel.sendIntent(HomeChatIntent.Send)
         }
     }
+    // 是否正在播报：药丸按钮据此决定「停止说话」还是「关闭通话模式」
+    var agentSpeaking by remember { mutableStateOf(false) }
+
     // 打断只在戴耳机时启用：外放会让麦克风听见 agent 自己，产生自我打断。
     // 有耳机（有线/蓝牙/USB）时，用户说话就是真的在说话。
     LaunchedEffect(listenMode) {
@@ -860,6 +865,7 @@ fun HomePageContent(
             if (listenMode) callModeController.resume()
         },
         listenMode = listenMode,
+        agentSpeaking = agentSpeaking,
         onToggleListenMode = {
             val next = !listenMode
             if (!next) voiceSpeaker.stop()
@@ -1191,6 +1197,7 @@ private fun HomePageContentBody(
     onInterruptSpeech: () -> Unit = {},
     listenMode: Boolean = false,
     onToggleListenMode: () -> Unit = {},
+    agentSpeaking: Boolean = false,
 ) {
 
     // 底部避让总高：composer 底距 + 实测高度 + 统一视觉间距。列表贴底留白与箭头
@@ -1374,6 +1381,7 @@ private fun HomePageContentBody(
                 onInterruptSpeech = onInterruptSpeech,
                 listenMode = listenMode,
                 onToggleListenMode = onToggleListenMode,
+                agentSpeaking = agentSpeaking,
                 backdrop = chatBackdrop,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
