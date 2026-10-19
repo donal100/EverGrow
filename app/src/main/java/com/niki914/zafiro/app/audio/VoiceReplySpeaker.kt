@@ -127,7 +127,22 @@ class VoiceReplySpeaker(private val appContext: Context) {
     }
 
     private suspend fun workerLoop() {
+        var ready: File? = null
         while (workerScope.isActive) {
+            // 上一轮已经预取好的那句必须先放掉。少了这一步，预取的音频就永远躺在
+            // next 里没人播 —— 表现是「只念了第一句就停下」。
+            val prepared = ready
+            if (prepared != null) {
+                ready = null
+                playing = true
+                try {
+                    runCatching { playBlocking(prepared) }
+                } finally {
+                    playing = false
+                    prepared.delete()
+                }
+                continue
+            }
             val text = withContext(Dispatchers.IO) { pending.poll(1, TimeUnit.SECONDS) }
             if (text == null) continue
             if (cancelled) {
@@ -151,8 +166,12 @@ class VoiceReplySpeaker(private val appContext: Context) {
                     log("worker: played chars=" + text.length)
                 }
             }
-            prefetch.await()
-            if (cancelled) pending.clear()
+            ready = prefetch.await()
+            if (cancelled) {
+                pending.clear()
+                ready?.delete()
+                ready = null
+            }
         }
     }
 
