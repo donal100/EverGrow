@@ -11,6 +11,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -58,6 +59,15 @@ class VoiceReplySpeaker(private val appContext: Context) {
     private val pending = LinkedBlockingQueue<String>()
     /** 合成好的音频排队等播放：合成线程和播放线程各跑各的，句与句之间自然接上。 */
     private val readyAudio = LinkedBlockingQueue<File>()
+    private val synthExec = java.util.concurrent.Executors.newSingleThreadExecutor { r -> Thread(r, "tts-synth").apply { isDaemon = true } }
+    private val playExec = java.util.concurrent.Executors.newSingleThreadExecutor { r -> Thread(r, "tts-play").apply { isDaemon = true } }
+
+    @Volatile
+    private var shutdown = false
+
+    @Volatile
+    private var synthBusy = false
+
     private val workerScope = CoroutineScope(
         SupervisorJob() + Dispatchers.IO + CoroutineExceptionHandler { _, err ->
             // 音频线程出什么事都不该带走整个应用：记一行，继续服务下一条
@@ -130,46 +140,59 @@ class VoiceReplySpeaker(private val appContext: Context) {
         pending.offer(clean)
         if (workerStarted.compareAndSet(false, true)) {
             pruneCache()
-            workerScope.launch { synthLoop() }
-            workerScope.launch { playLoop() }
+            // 用真正的阻塞线程而不是协程调度器：嵌套 withContext 在这个 Chaquopy 环境里
+            // 会卡住（合成完第一句之后再也不取第二句），线程池没有这个坑。
+            synthExec.execute { synthLoopBlocking() }
+            playExec.execute { playLoopBlocking() }
         }
     }
 
     /** 等队列念完（调用方据此决定何时把麦克风交还通话模式）。 */
     suspend fun awaitIdle() {
-        while (playing || pending.isNotEmpty() || readyAudio.isNotEmpty()) delay(60)
+        while (playing || synthBusy || pending.isNotEmpty() || readyAudio.isNotEmpty()) delay(60)
     }
 
-    /**
-     * 两条独立流水线：合成线程只负责「文本 -> wav」，播放线程只负责「wav -> 声音」。
-     * 这样第 N+1 句在当前句还在响的时候就已经合成好了，接缝自然消失 ——
-     * 而且两边互不等待，不会出现之前那种「预取的音频没人播」。
-     */
-    private suspend fun synthLoop() {
-        while (workerScope.isActive) {
-            val text = withContext(Dispatchers.IO) { pending.poll(1, TimeUnit.SECONDS) } ?: continue
-            log("synth: take chars=" + text.length + " active=" + workerScope.isActive + " cancelled=" + cancelled)
-            if (cancelled) continue
-            val audio = synthesizeToFile(text) ?: continue
-            log("synth: ready chars=" + text.length + " head=" + text.take(32) + " pending=" + pending.size)
-            if (cancelled) {
-                audio.delete()
-                continue
+    /** 文本 -> wav。阻塞线程，取到就合成，合成好就交给播放线程。 */
+    private fun synthLoopBlocking() {
+        while (true) {
+            if (shutdown) return
+            val text = try {
+                pending.take()
+            } catch (e: InterruptedException) {
+                return
             }
-            readyAudio.put(audio)
+            if (cancelled) continue
+            synthBusy = true
+            try {
+                val audio = runBlocking { synthesizeToFile(text) } ?: continue
+                log("synth: ready chars=" + text.length + " head=" + text.take(32) + " pending=" + pending.size)
+                if (cancelled) {
+                    audio.delete()
+                    continue
+                }
+                readyAudio.put(audio)
+            } finally {
+                synthBusy = false
+            }
         }
     }
 
-    private suspend fun playLoop() {
-        while (workerScope.isActive) {
-            val audio = withContext(Dispatchers.IO) { readyAudio.poll(1, TimeUnit.SECONDS) } ?: continue
+    /** wav -> 喇叭。阻塞线程，一句念完再取下一句。 */
+    private fun playLoopBlocking() {
+        while (true) {
+            if (shutdown) return
+            val audio = try {
+                readyAudio.take()
+            } catch (e: InterruptedException) {
+                return
+            }
             if (cancelled) {
                 audio.delete()
                 continue
             }
             playing = true
             try {
-                runCatching { playBlocking(audio) }
+                runBlocking { playBlocking(audio) }
             } finally {
                 playing = false
                 audio.delete()
@@ -338,6 +361,9 @@ class VoiceReplySpeaker(private val appContext: Context) {
 
     fun release() {
         stop()
+        shutdown = true
+        runCatching { synthExec.shutdownNow() }
+        runCatching { playExec.shutdownNow() }
         runCatching { workerScope.cancel() }
         fallback.release()
     }
