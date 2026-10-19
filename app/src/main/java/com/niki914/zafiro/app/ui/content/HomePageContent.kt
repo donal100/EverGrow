@@ -496,7 +496,8 @@ fun HomePageContent(
 
         // 开播基线：此刻「最后一条」是上一条回答（新提问还没追加进列表）
         val baseTurnId = latestUiState.turns.lastOrNull()?.id ?: -1L
-        val baseLength = turnText(latestUiState.turns.lastOrNull()).length
+        val baseText = turnText(latestUiState.turns.lastOrNull())
+        val baseLength = baseText.length
         voiceSpeaker.note("stream: baseline turn=" + baseTurnId + " len=" + baseLength)
 
         streamingJob = voiceScope.launch {
@@ -513,10 +514,12 @@ fun HomePageContent(
                     val full = turnText(last)
                     val sameTurn = last?.id == baseTurnId
                     // 本轮新增的正文：同一轮取超出的尾部，新一轮取全文
-                    val fresh = if (sameTurn) {
-                        if (full.length > baseLength) full.substring(baseLength) else ""
-                    } else {
-                        full
+                    // 同一轮里文本可能是「追加」，也可能是「被替换」（实测 "Four." -> "Five."
+                    // 长度一样，靠长度判断会得出「没有新内容」）。只有真以基线开头才切尾。
+                    val fresh = when {
+                        !sameTurn -> full
+                        full.startsWith(baseText) -> full.substring(baseLength)
+                        else -> full
                     }
 
                     val cut = sentenceEnd(fresh, spoken)
@@ -545,10 +548,10 @@ fun HomePageContent(
                     val last = latestUiState.turns.lastOrNull()
                     val full = turnText(last)
                     val sameTurn = last?.id == baseTurnId
-                    val fresh = if (sameTurn) {
-                        if (full.length > baseLength) full.substring(baseLength) else ""
-                    } else {
-                        full
+                    val fresh = when {
+                        !sameTurn -> full
+                        full.startsWith(baseText) -> full.substring(baseLength)
+                        else -> full
                     }
                     if (fresh.length > spoken) {
                         val rest = fresh.substring(spoken).trim()
