@@ -37,7 +37,7 @@ object SpokenForm {
     }
 
     private val units = mapOf(
-        "km/h" to "kilometres per hour", "km" to "kilometres", "m" to "metres",
+        "per km" to "per kilometre", "km/h" to "kilometres per hour", "km" to "kilometres", "m" to "metres",
         "kg" to "kilograms", "g" to "grams", "mins" to "minutes", "min" to "minutes",
         "h" to "hours", "hrs" to "hours", "s" to "seconds", "%" to "percent",
         "HKD" to "Hong Kong dollars", "USD" to "US dollars", "&" to "and", "#" to "number"
