@@ -46,6 +46,17 @@ class VoiceReplySpeaker(private val appContext: Context) {
         .readTimeout(60, TimeUnit.SECONDS)
         .build()
 
+    /**
+     * 流式合成专用的 client。读超时必须短：
+     * 实测有一次 "Nine." 的请求只回了一个 chunk 就卡住 19 秒，
+     * 期间麦克风一直被 pause 住 —— 用户以为「不说话了也不听了」。
+     * 8 秒没有新数据就放弃，走兜底合成（约 1.9 秒出音）。
+     */
+    private val streamHttp = OkHttpClient.Builder()
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(8, TimeUnit.SECONDS)
+        .build()
+
     private val fallback = SpeechOutput(appContext)
     private var player: MediaPlayer? = null
 
@@ -178,6 +189,9 @@ class VoiceReplySpeaker(private val appContext: Context) {
      */
     private fun streamAndPlay(text: String): Boolean {
         if (cancelled) return true
+        // 极短回答（一个词）用普通合成：流式对 5 个字符没有意义，
+        // 实测反而更容易卡住（"Nine." 只回一个 chunk 就停住 19 秒）。
+        if (text.length <= 12) return false
         val key = runCatching { File(appContext.filesDir, KEY_FILE).readText().trim() }.getOrNull()
         if (key.isNullOrEmpty()) return false
         val payload = JSONObject()
@@ -202,7 +216,7 @@ class VoiceReplySpeaker(private val appContext: Context) {
 
         var track: AudioTrack? = null
         return try {
-            http.newCall(request).execute().use { response ->
+            streamHttp.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
                     log("stream: HTTP " + response.code)
                     return false

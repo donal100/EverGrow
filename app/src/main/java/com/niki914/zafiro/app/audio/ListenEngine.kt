@@ -134,8 +134,28 @@ class ListenEngine(
         if (active) main.postDelayed({ if (active) openSession() }, 250)
     }
 
-    fun pause() { paused = true }
-    fun resume() { paused = false; currentPartial = "" }
+    fun pause() {
+        paused = true
+        // 看门狗：播报失败时（请求卡住、引擎异常）没人会来调 resume，
+        // 麦克风就永远静音 —— 实测出现过「不说话了，也不再听」。
+        // 12 秒还没恢复就自己解开，宁可多听一句，不要变成聋子。
+        main.removeCallbacks(resumeGuard)
+        main.postDelayed(resumeGuard, 12_000)
+    }
+
+    fun resume() {
+        main.removeCallbacks(resumeGuard)
+        paused = false
+        currentPartial = ""
+    }
+
+    private val resumeGuard = Runnable {
+        if (paused) {
+            paused = false
+            currentPartial = ""
+            log("watchdog: resumed listening after stuck pause")
+        }
+    }
 
     fun stop() {
         active = false
