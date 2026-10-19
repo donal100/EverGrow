@@ -25,7 +25,7 @@ object SpokenForm {
     private fun number(n: Long): String = when {
         n < 0 -> "minus " + number(-n)
         n < 1000 -> under1000(n.toInt())
-        n < 1_000_000 -> under1000((n / 1000).toInt()) + " thousand" + if (n % 1000 != 0) " " + under1000((n % 1000).toInt()) else ""
+        n < 1_000_000 -> under1000((n / 1000).toInt()) + " thousand" + if (n % 1000 != 0L) " " + under1000((n % 1000).toInt()) else ""
         else -> n.toString()
     }
 
