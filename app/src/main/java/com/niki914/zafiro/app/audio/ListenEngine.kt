@@ -38,8 +38,8 @@ class ListenEngine(
     private var pfdRead: ParcelFileDescriptor? = null
     private var pfdWrite: ParcelFileDescriptor? = null
 
-    /** 管道写入与关闭必须互斥：否则会撞上 "write interrupted by close() on another thread"。 */
-    private val lock = Any()
+    private val queue = java.util.concurrent.ArrayBlockingQueue<ByteArray>(64)
+    private var writer: Thread? = null
 
     @Volatile private var active = false
     @Volatile private var paused = false
@@ -51,6 +51,7 @@ class ListenEngine(
         recorder.onSamples = { buf, n -> feed(buf, n) }
         recorder.onVoiceActivity = null
         recorder.start()
+        startWriter()
         main.post { openSession() }
     }
 
@@ -59,8 +60,7 @@ class ListenEngine(
             val pipe = ParcelFileDescriptor.createPipe()
             pfdRead = pipe[0]
             pfdWrite = pipe[1]
-            val stream = FileOutputStream(pfdWrite!!.fileDescriptor)
-            synchronized(lock) { out = stream }
+            out = FileOutputStream(pfdWrite!!.fileDescriptor)
             val r = SpeechRecognizer.createSpeechRecognizer(context)
             r.setRecognitionListener(listener)
             val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
@@ -79,10 +79,15 @@ class ListenEngine(
         }.onFailure { log("session failed: " + it.message) }
     }
 
-    /** 把麦克风样本写进管道。写失败就重开一次会话（识别器偶尔会自己结束）。 */
+    /**
+     * 把麦克风样本丢进队列，由专门的写线程送进管道。
+     *
+     * 为什么不在麦克风线程里直接写：管道满时 write() 会一直阻塞，
+     * 而关闭会话要拿同一把锁 —— 主线程就被卡住，表现就是「应用卡死」。
+     * 现在写不进去就丢样本（宁可丢几十毫秒音频，也不能卡住界面）。
+     */
     private fun feed(buf: ShortArray, n: Int) {
         if (!active || paused) return
-        val stream = out ?: return
         val bytes = ByteArray(n * 2)
         var p = 0
         for (i in 0 until n) {
@@ -90,15 +95,23 @@ class ListenEngine(
             bytes[p++] = (v and 0xFF).toByte()
             bytes[p++] = ((v shr 8) and 0xFF).toByte()
         }
-        synchronized(lock) {
-            if (out == null) return
-            runCatching {
-                stream.write(bytes)
-                stream.flush()
-            }.onFailure {
-                log("feed failed: " + it.message)
+        // 队列有界：满了说明识别器跟不上，丢新样本即可
+        queue.offer(bytes)
+    }
+
+    private fun startWriter() {
+        if (writer != null) return
+        writer = Thread {
+            while (active) {
+                val bytes = runCatching { queue.poll(200, java.util.concurrent.TimeUnit.MILLISECONDS) }.getOrNull()
+                    ?: continue
+                val stream = out ?: continue
+                runCatching {
+                    stream.write(bytes)
+                    stream.flush()
+                }.onFailure { log("writer: " + it.message) }
             }
-        }
+        }.also { it.isDaemon = true; it.start() }
     }
 
     private val listener = object : RecognitionListener {
@@ -173,14 +186,16 @@ class ListenEngine(
         active = false
         recorder.onSamples = null
         recorder.stop()
+        // 先让写线程退出，再关管道：否则它会继续往已经关掉的流里写
+        writer?.interrupt()
+        writer = null
+        queue.clear()
         closeSession()
     }
 
     private fun closeSession() {
-        synchronized(lock) {
-            runCatching { out?.close() }
-            out = null
-        }
+        runCatching { out?.close() }
+        out = null
         runCatching { pfdWrite?.close() }
         pfdWrite = null
         runCatching { recognizer?.cancel() }
