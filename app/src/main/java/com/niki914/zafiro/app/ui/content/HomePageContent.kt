@@ -531,8 +531,10 @@ fun HomePageContent(
                         continue
                     }
                     if (!snapshot.isGenerating && fresh.length <= spoken) {
+                        // 生成结束后，正文还要过一会儿才被追加进列表（实测「Four.」晚了约 1 秒）。
+                        // 之前只等 400ms 就放弃 —— 表现就是「一个字都没念」。
                         stableFor += 120
-                        if (stableFor >= 400) break
+                        if (stableFor >= 4000) break
                     } else {
                         stableFor = 0
                     }
