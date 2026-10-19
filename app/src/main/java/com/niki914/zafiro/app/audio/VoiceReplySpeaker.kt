@@ -282,7 +282,7 @@ class VoiceReplySpeaker(private val appContext: Context) {
                         ?.optString("data")
                         .orEmpty()
                     if (audio.isEmpty()) continue
-                    val bytes = Base64.decode(audio, Base64.DEFAULT)
+                    val bytes = squeezeSilence(Base64.decode(audio, Base64.DEFAULT))
                     if (bytes.isEmpty()) continue
                     gotAudio = true
                     lines++
@@ -336,6 +336,49 @@ class VoiceReplySpeaker(private val appContext: Context) {
             runCatching { track?.release() }
             track = null
         }
+    }
+
+    /**
+     * 把过长的静音压短。
+     *
+     * 实测 qwen3.5-omni-plus 会在逗号处停顿约 0.43 秒，12.8 秒的句子里出现四次，
+     * 听起来就是「断断续续」。这里把超过 200ms 的静音压到 150ms，
+     * 每段开头的静音也一并处理 —— 只是去掉多余的空白，不动语音本身。
+     */
+    private fun squeezeSilence(pcm: ByteArray): ByteArray {
+        val n = pcm.size / 2
+        if (n < 200) return pcm
+        val samples = ShortArray(n)
+        var i = 0
+        var p = 0
+        while (i < n) {
+            val v = ((pcm[p + 1].toInt() shl 8) or (pcm[p].toInt() and 0xFF)).toShort()
+            samples[i] = v
+            i++; p += 2
+        }
+        val threshold = 400
+        val maxRun = 24 * 150 / 10      // 150ms 允许的最长静音帧数（24kHz）
+        val out = ShortArray(n)
+        var w = 0
+        var run = 0
+        for (s in samples) {
+            if (kotlin.math.abs(s.toInt()) < threshold) {
+                run++
+                if (run <= maxRun) { out[w++] = s }
+            } else {
+                run = 0
+                out[w++] = s
+            }
+        }
+        if (w == n) return pcm
+        val res = ByteArray(w * 2)
+        var q = 0
+        for (k in 0 until w) {
+            val v = out[k].toInt()
+            res[q++] = (v and 0xFF).toByte()
+            res[q++] = ((v shr 8) and 0xFF).toByte()
+        }
+        return res
     }
 
     /**
@@ -638,7 +681,7 @@ class VoiceReplySpeaker(private val appContext: Context) {
             "https://maas.qwencloudapi.com/compatible-mode/v1/chat/completions"
         private const val STREAM_MODEL = "qwen3.5-omni-plus"
         /** 24kHz 16bit 单声道：0.6 秒 ≈ 28800 字节 */
-        private const val PREBUFFER_BYTES = 28_800
+        private const val PREBUFFER_BYTES = 48_000
         /** 保留最近几段合成音频，供事后分析 */
         private const val SAMPLE_KEEP = 12
         private const val ENDPOINT =
