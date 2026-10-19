@@ -490,8 +490,10 @@ fun HomePageContent(
         streamingTurnId = turnId
         voiceLatchTurnId = turnId
 
-        fun turnText(): String = latestUiState.turns.lastOrNull()
-            ?.takeIf { it.id == turnId }
+        // 必须按 id 找这一轮，而不是「最后一条」：用户说话很快时，新一轮已经
+        // 追加到列表末尾，最后一条就不再是我们要念的那一轮 —— 于是 spokenChars=0，
+        // 表现就是「这条回答一个字都没念」。
+        fun turnText(): String = latestUiState.turns.firstOrNull { it.id == turnId }
             ?.blocks
             ?.filterIsInstance<HomeChatBlock.Text>()
             ?.joinToString("\n") { it.text }
