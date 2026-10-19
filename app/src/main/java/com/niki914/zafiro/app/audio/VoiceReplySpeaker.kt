@@ -310,6 +310,48 @@ class VoiceReplySpeaker(private val appContext: Context) {
      * 等 AudioTrack 把写入的帧真的播完再停。
      * 之前直接 stop()，缓冲区里最后那几百毫秒被丢掉 —— 听感上就是句尾被切。
      */
+    /**
+     * 把这次合成的原始 PCM 存成 wav，方便事后分析：
+     * 句间空隙、爆音、被切掉的尾巴都能从这里看出来。只留最近 SAMPLE_KEEP 条。
+     */
+    private fun saveSample(pcm: ByteArray, text: String, worstGapMs: Long, jitter: Int, chunks: Int) {
+        runCatching {
+            if (pcm.isEmpty()) return
+            val dir = File(appContext.filesDir, "voice_samples")
+            if (!dir.exists()) dir.mkdirs()
+            val stamp = System.currentTimeMillis()
+            val wav = File(dir, "tts_" + stamp + ".wav")
+            val header = ByteArray(44)
+            fun put32(off: Int, v: Int) {
+                header[off] = (v and 0xFF).toByte()
+                header[off + 1] = ((v shr 8) and 0xFF).toByte()
+                header[off + 2] = ((v shr 16) and 0xFF).toByte()
+                header[off + 3] = ((v shr 24) and 0xFF).toByte()
+            }
+            fun put16(off: Int, v: Int) {
+                header[off] = (v and 0xFF).toByte()
+                header[off + 1] = ((v shr 8) and 0xFF).toByte()
+            }
+            "RIFF".toByteArray().copyInto(header, 0)
+            put32(4, pcm.size + 36)
+            "WAVE".toByteArray().copyInto(header, 8)
+            "fmt ".toByteArray().copyInto(header, 12)
+            put32(16, 16); put16(20, 1); put16(22, 1)
+            put32(24, 24_000); put32(28, 48_000)
+            put16(32, 2); put16(34, 16)
+            "data".toByteArray().copyInto(header, 36)
+            put32(40, pcm.size)
+            wav.writeBytes(header)
+            wav.appendBytes(pcm)
+            File(dir, "tts_" + stamp + ".txt").writeText(
+                "chunks=" + chunks + " worstGapMs=" + worstGapMs + " jitter=" + jitter + "\n" + text
+            )
+            val all = dir.listFiles { f -> f.name.startsWith("tts_") }
+                ?.sortedByDescending { it.lastModified() } ?: return
+            all.drop(SAMPLE_KEEP).forEach { runCatching { it.delete() } }
+        }
+    }
+
     private fun drain(t: AudioTrack, writtenFrames: Long) {
         runCatching {
             val deadline = System.currentTimeMillis() + 30_000
