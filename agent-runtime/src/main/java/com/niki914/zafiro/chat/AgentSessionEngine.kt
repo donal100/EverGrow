@@ -330,6 +330,8 @@ class AgentSessionEngine {
                 force = false,
                 contextTokens = contextTokens,
                 contextWindow = contextWindow,
+                // 把补全额度一起交进去：压缩判定要看「可用输入空间」，不是裸窗口
+                reservedOutputTokens = state.snapshot.config.maxTokens.toLong(),
             )
 
             streamPipeline.execute(
@@ -403,6 +405,7 @@ class AgentSessionEngine {
             force = force,
             contextTokens = contextTokens,
             contextWindow = contextWindow,
+            reservedOutputTokens = state.snapshot.config.maxTokens.toLong(),
         )
     }
 

@@ -36,7 +36,7 @@
     <!-- Home -->
     <string name="ui_home_title">Zafiro</string>
     <string name="ui_home_menu_new_conversation">新对话</string>
-    <string name="ui_home_input_placeholder">输入消息...</string>
+    <string name="ui_home_input_placeholder">输入消息</string>
     <string name="ui_home_conversation_compacted">对话已压缩</string>
     <string name="ui_home_conversation_compacting">正在压缩</string>
     <string name="ui_tool_status_called">已调用</string>

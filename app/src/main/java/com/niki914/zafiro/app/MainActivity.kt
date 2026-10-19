@@ -49,6 +49,10 @@ class MainActivity : AppCompatActivity() {
         // launcher 必须在 STARTED 前注册：预注册后装进 ApplicationService
         requireService<ApplicationService>()
             .installPermissionLauncher(permissionLauncher)
+        // 每次冷启动都重排一次闹钟：更新、强停、系统清理都可能把已排的提醒弄丢，
+        // 而用户预期「设过的事一定响」。
+        runCatching { com.niki914.zafiro.app.schedule.ScheduleStore.rearmAll(applicationContext) }
+
         val startupAssistantUi = resolveStartupAssistantUi()
         val launchDecision = runBlocking {
             val decision = AppLaunchDecision.resolve(startupAssistantUi)

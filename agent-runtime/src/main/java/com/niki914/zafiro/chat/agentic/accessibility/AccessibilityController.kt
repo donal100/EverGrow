@@ -820,6 +820,20 @@ object AccessibilityController {
     }
 
     /**
+     * 坐标点按：用无障碍的 dispatchGesture 在 (x,y) 点一下。
+     *
+     * 为什么要这个：shell 的 input tap 需要 INJECT_EVENTS，而本机以普通应用 UID 运行，
+     * 直接输入被系统拒绝；dispatchGesture 是无障碍服务本来就有的能力，不需要额外权限。
+     * YouTube 这类把播放控件藏起来、只能按坐标点的界面，就靠它。
+     */
+    fun tapAt(x: Float, y: Float): Boolean = runCatching {
+        serviceInstance?.dispatchGesture(x, y, x, y, 50) ?: false
+    }.getOrDefault(false)
+
+    /** 当前无障碍服务是否已连接（给调用方判断能否点按）。 */
+    fun isAvailable(): Boolean = serviceInstance != null
+
+    /**
      * Executes a swipe gesture via accessibility dispatch.
      */
     suspend fun executeGesture(

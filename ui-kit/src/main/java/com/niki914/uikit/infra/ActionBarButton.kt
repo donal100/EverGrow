@@ -28,6 +28,7 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kyant.backdrop.Backdrop
@@ -51,6 +52,9 @@ fun ActionBarButton(
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
     enabled: Boolean = true,
+    // 直径（sp）。默认 48 是历史尺寸；composer 里传小值把按钮缩小一半。
+    // 圆、内边距、内容一起等比缩放，否则小圆里塞 24dp 图标会顶满。
+    sizeSp: Float = 48f,
     backdrop: Backdrop = emptyBackdrop(),
     onButtonBoundsChanged: ((Rect) -> Unit)? = null,
     content: @Composable () -> Unit,
@@ -72,11 +76,12 @@ fun ActionBarButton(
     val baseSurfaceColor = LiquidGlassPresets.Button.surfaceColor(isDarkTheme, colorScheme)
     val interactionSource = remember { MutableInteractionSource() }
     val buttonShape = RoundedCornerShape(56.dp)
+    val scaleFactor = sizeSp / 48f
 
     Box(
         modifier = modifier
-            .padding(horizontal = 12.dp, vertical = 12.dp)
-            .requiredSize(with(density) { 48.sp.toDp() })
+            .padding(horizontal = (12f * scaleFactor).dp, vertical = (12f * scaleFactor).dp)
+            .requiredSize(with(density) { sizeSp.sp.toDp() })
             .then(
                 if (onButtonBoundsChanged != null) {
                     Modifier.onGloballyPositioned { coordinates ->
@@ -148,6 +153,8 @@ fun ActionBarButton(
             ),
         contentAlignment = Alignment.Center,
     ) {
-        content()
+        Box(modifier = Modifier.scale(scaleFactor)) {
+            content()
+        }
     }
 }

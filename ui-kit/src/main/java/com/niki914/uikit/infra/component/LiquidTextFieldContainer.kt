@@ -248,20 +248,16 @@ internal fun LiquidTextFieldContainer(
                     }
                 }
                 if (expandedLayout && expandedActionsRow != null) {
+                    // 展开态的按钮行必须以 expandedActionsRow 为准：之前这里渲染的是
+                    // leading/trailing，于是 expandedActionsRow 只当了个开关用，
+                    // 里面排的 Speak 药丸从来没画出来过。
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        if (leadingContent != null) {
-                            CompositionLocalProvider(LocalContentColor provides trailingColor) {
-                                leadingContent(this@Row)
-                            }
-                        }
-                        if (trailingContent != null) {
-                            CompositionLocalProvider(LocalContentColor provides trailingColor) {
-                                trailingContent(this@Row)
-                            }
+                        CompositionLocalProvider(LocalContentColor provides trailingColor) {
+                            expandedActionsRow(this@Row)
                         }
                     }
                 }

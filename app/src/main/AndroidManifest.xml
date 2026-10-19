@@ -11,8 +11,26 @@
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
     <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" />
-    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- 定位：给 agent 的 py_gps 工具读取原始 GPS 数据（经纬度/精度/高度/速度/航向） -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <!-- 跑步记录：只要前台服务的类型权限。前台服务本身就是「正在使用中」，
+         不需要 ACCESS_BACKGROUND_LOCATION —— 那条权限对银行类 App 的扫描器来说
+         是高风险信号，而这里并不需要它。文件写入同理，改用 MediaStore，
+         于是 MANAGE_EXTERNAL_STORAGE（全盘访问）也一起去掉了。 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <!-- 听写要在锁屏后继续：前台服务 + microphone 类型 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- 自己的日历：精确闹钟（12+ 可被用户拒绝，代码里退化成不精确）+ 开机后重排 -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <uses-feature
+        android:name="android.hardware.microphone"
+        android:required="false" />
 
     <queries>
         <package android:name="com.heytap.speechassist" />
@@ -145,5 +163,36 @@
                 <action android:name="com.niki914.zafiro.runtime.BIND" />
             </intent-filter>
         </service>
-    </application>
+
+        <!-- 跑步记录：只有 declared location 类型的前台服务能在锁屏后继续收定位点 -->
+        <service
+            android:name="com.niki914.zafiro.app.location.RunTrackingService"
+            android:exported="false"
+            android:foregroundServiceType="location" />
+
+            <receiver
+            android:name=".schedule.ScheduleReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.niki914.zafiro.action.SCHEDULE_FIRE" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name=".schedule.BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <!-- 应用更新会取消所有闹钟：装一次新版本就把已排的提醒清空了。 -->
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
+        <service
+            android:name=".audio.ListenService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
+
+</application>
 </manifest>

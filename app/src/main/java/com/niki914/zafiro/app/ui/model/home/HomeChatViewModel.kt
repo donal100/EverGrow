@@ -102,6 +102,7 @@ class HomeChatViewModel internal constructor(
     override suspend fun handleIntent(intent: HomeChatIntent) {
         when (intent) {
             is HomeChatIntent.InputChanged -> onInputChanged(intent.value)
+            HomeChatIntent.ToggleVoiceMode -> updateState { copy(voiceMode = !voiceMode) }
             HomeChatIntent.Send -> sendCurrentInput()
             is HomeChatIntent.ImageAttached -> attachImage(intent.uri)
             is HomeChatIntent.ImageRemoved -> removeImage(intent.id)
@@ -243,6 +244,21 @@ class HomeChatViewModel internal constructor(
         if (isLoadedConversation) conversationBeingLoaded = null
 
         val last = target.lastOrNull()
+
+        // —— 语音出口 ——
+        // 这里拿到的是权威的会话内容（不是 UI 列表的推断），把最后一条回答的全文
+        // 推给 VoiceOutbox，由它算出「新增部分」交给 TTS。没有 id、没有基线猜测。
+        runCatching {
+            val spokenText = last?.blocks
+                ?.filterIsInstance<com.niki914.zafiro.app.ui.model.home.HomeChatBlock.Text>()
+                ?.joinToString("\n") { it.text }
+                ?.trim()
+                .orEmpty()
+            if (spokenText.isNotEmpty() && !loaded) {
+                com.niki914.zafiro.app.audio.VoiceOutbox.onAssistantText(spokenText)
+            }
+        }
+
         var paceBlockIndex = -1
         var paceKind: String? = null
         if (last != null && !loaded) {
@@ -514,7 +530,15 @@ class HomeChatViewModel internal constructor(
             sendEffect(HomeChatEffect.EmptyInputAttempted)
             return
         }
-        agent.updateDraft { it.copy(text = trimmedInput) }
+        // 语音模式下让模型知道回答将被朗读：同一句话写出来和念出来的最佳长度完全不同。
+        // 这条注记随消息一起进入会话（用户能看到），因为 app 与 agent-runtime 之间有 IPC 边界，
+        // 真正「隐形」的每回合注入需要改 AIDL 协议，先不做。
+        val outboundText = if (currentState.voiceMode) {
+            VOICE_MODE_NOTE + "\n\n" + trimmedInput
+        } else {
+            trimmedInput
+        }
+        agent.updateDraft { it.copy(text = outboundText) }
         // stream() is synchronous; don't let it consume Pending images before AgentImpl finishes ingest.
         agent.draft.first { draft -> draft.images.none { it is DraftImage.Pending } }
         updateState { copy(isGenerating = true) }
@@ -569,6 +593,9 @@ class HomeChatViewModel internal constructor(
                 savedConfigs = currentState.savedConfigs,
                 globalActiveConfigId = currentState.globalActiveConfigId,
                 boundConfigId = null,
+                // 重建状态时必须带上 voiceMode：否则「新建会话 / 加载会话」会把语音模式悄悄关掉，
+                // 而用户看到的是开关还亮着（这正是之前「有 [voice mode: on] 标记却没有声音」的原因）
+                voiceMode = currentState.voiceMode,
             )
         }
         viewModelScope.launch {
@@ -813,6 +840,9 @@ class HomeChatViewModel internal constructor(
                 savedConfigs = currentState.savedConfigs,
                 globalActiveConfigId = currentState.globalActiveConfigId,
                 boundConfigId = null,
+                // 重建状态时必须带上 voiceMode：否则「新建会话 / 加载会话」会把语音模式悄悄关掉，
+                // 而用户看到的是开关还亮着（这正是之前「有 [voice mode: on] 标记却没有声音」的原因）
+                voiceMode = currentState.voiceMode,
             )
         }
         viewModelScope.launch {
@@ -898,6 +928,9 @@ class HomeChatViewModel internal constructor(
     companion object {
         private const val LOG_TAG = "niki914_zafiro_HomeChatState"
         private const val DRAFT_SAVE_DEBOUNCE_MS = 350L
+
+        /** 语音模式下随消息一起发出的说明：同一句话写出来和念出来的最佳长度不同。 */
+        private const val VOICE_MODE_NOTE = "[voice mode: on]"
     }
 }
 

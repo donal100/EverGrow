@@ -1,5 +1,8 @@
 package com.niki914.zafiro.app.ui.content
 
+import android.Manifest
+import android.content.pm.PackageManager
+
 import android.app.Activity
 import android.content.ClipData
 import android.content.Context
@@ -76,6 +79,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -160,6 +167,8 @@ import com.niki914.zafiro.app.ui.model.home.HomeChatUiState
 import com.niki914.zafiro.app.ui.model.home.HomeChatViewModel
 import com.niki914.zafiro.app.ui.model.home.HomeToolState
 import com.niki914.zafiro.app.ui.model.home.HomeToolStatus
+import com.niki914.zafiro.app.audio.CallModeController
+import com.niki914.zafiro.app.audio.VoiceReplySpeaker
 import com.niki914.zafiro.app.ui.model.home.MessageActionsDisplay
 import com.niki914.zafiro.app.ui.nav.TopBarActionSpec
 import com.niki914.zafiro.business.application.ApplicationService
@@ -177,6 +186,98 @@ import java.io.File
  * （从设置页/历史页返回不打断用户）。仿 StartupPageContent.demoHasPlayed 的写法。
  */
 private var composerAutoFocusDone = false
+
+/**
+ * 已经念过的「回合 + 正文」。放在文件级而不是 remember{} 里：
+ * 退出 Home 再进来、或页面重建时，旧回答不该被重新念一遍。
+ */
+private var voiceLatchTurnId = -1L
+private var voiceLatchText = ""
+
+/**
+ * 通话模式开关。放文件级 Compose state 而不是 remember{}：页面重建、切去设置再回来
+ * 都不该忘记「我正在打电话」。之前用 remember，结果菜单显示 off、麦克风其实还在听。
+ * 进程重启会归零 —— 这是有意的，没人希望应用一启动就自己开麦。
+ */
+private val listenModeState = mutableStateOf(false)
+
+/**
+ * 发言器必须是进程级的：之前它跟着 composition 走，页面一重建 onDispose 就把
+ * 后台播放线程 cancel 掉 —— 表现是「念了第一句就没了」。
+ */
+/** 念话的协程作用域：进程级，页面重建不打断。 */
+private val speechScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+private var sharedSpeaker: com.niki914.zafiro.app.audio.VoiceReplySpeaker? = null
+
+private fun speakerFor(context: android.content.Context) = sharedSpeaker
+    ?: com.niki914.zafiro.app.audio.VoiceReplySpeaker(context).also { sharedSpeaker = it }
+
+/** 送合成的最小字符数：太小就会出现句间空隙（合成比播放慢）。 */
+private const val MIN_SPEECH_CHUNK = 140
+
+/** 通话模式期间使用的思考强度：语音对话要的是「马上开口」，不是深思熟虑。 */
+private const val VOICE_THINKING_LEVEL = "minimal"
+
+/** 进通话模式前用户原来的思考强度，退出时还原。 */
+private var savedThinkingLevel: String? = null
+
+/**
+ * 流式播报：边生成边念完整的句子，第一句不用等全文。
+ * 互斥锁保证「第一句」和「尾巴」不会同时占用播放器（Qwen 合成是并发的）。
+ */
+@Volatile private var streamingTurnId = -1L
+
+/**
+ * 当前正在念这一轮的任务。必须只允许一个：否则上一轮的尾巴和新一轮的开头会同时
+ * 往队列里塞句子，播放器把它们交错念出来 —— 听感就是「念的根本不是我写的」。
+ */
+@Volatile private var streamingJob: kotlinx.coroutines.Job? = null
+@Volatile private var speechCancelled = false
+
+/** 上一次完整念完的正文。防止「回头找上一条有正文的消息」时把旧回答再念一遍。 */
+@Volatile private var lastFullySpoken: String = ""
+
+/**
+ * 缩写词：句点后面不是句子结束。不做这一步的话 "e.g." 与 "Dr." 会把一句话劈成两半，
+ * 合成出来就是断在词中间的两段音频。
+ */
+private val ABBREVIATIONS = setOf(
+    "e.g", "i.e", "vs", "dr", "mr", "mrs", "ms", "st", "no", "approx", "etc", "cf", "al",
+)
+
+/** 找一段文本里下一个句末位置（从 from 起算，太短的片段先攒着）。 */
+private fun sentenceEnd(text: String, from: Int): Int {
+    var i = from
+    while (i < text.length) {
+        val c = text[i]
+        if (c == '\n' && i - from >= 12) {
+            // 列表项（"1. " / "- "）后面换行不算句末，否则会念成 "one" 就停
+            return i + 1
+        }
+        if ((c == '.' || c == '!' || c == '?' || c == '。' || c == '！' || c == '？') &&
+            i - from >= 12 &&
+            (i + 1 >= text.length || text[i + 1].isWhitespace())
+        ) {
+            if (c == '.') {
+                val wordStart = text.lastIndexOf(' ', i - 1).let { if (it < from) from else it + 1 }
+                val word = text.substring(wordStart, i).trim().trimStart('(', '"', '\'').lowercase()
+                if (word in ABBREVIATIONS) {
+                    i++
+                    continue
+                }
+                // 单字母缩写（"J. Smith"）也跳过
+                if (word.length == 1) {
+                    i++
+                    continue
+                }
+            }
+            return i + 1
+        }
+        i++
+    }
+    return from
+}
 private const val AUTO_FOCUS_MAX_ATTEMPTS = 20
 private const val AUTO_FOCUS_RETRY_INTERVAL_MILLIS = 150L
 
@@ -342,6 +443,190 @@ fun HomePageContent(
         }
     }
 
+    // 语音播报交给 agent 自己决定：它有两个工具（py_speak 用本机引擎，py_speak_qwen 用 Qwen 云端音色），
+    // 由模型判断「这条回答要不要念、用哪个嗓子」。这里不再无条件朗读——否则会出现
+    // 「自动朗读一次 + 工具再念一次」的双重声音。
+
+    // —— 语音模式：回合结束后把最终回答念出来 ——
+    // 只有真的观察到「生成中→结束」才念，避免打开历史会话时朗读旧消息；
+    // 播的是 final 文本（流式中间态会被反复修正，边生成边念会不停改口）。
+    // LocalContext.current 是 @Composable 调用，不能写在 remember{} 的 lambda 里（这条我犯过两次）
+    val voiceContext = LocalContext.current.applicationContext
+    val voiceSpeaker = remember { speakerFor(voiceContext) }
+    // 播报不能挂在 composition 的 LaunchedEffect 上：效果随 key 重启，会把正在进行的
+    // 云端合成一起取消（日志里的 "The coroutine scope left the composition" 就是这个），
+    // 于是每次都被兜底的本机 TTS 抢着念 —— 听感上就是「一直重复」。给播报一条自己的命。
+    val voiceScope = speechScope
+    // —— 通话模式（Listen mode）：像打电话一样一直听着 ——
+    // 用户说完一句 -> 走正常发消息链路 -> agent 回复 -> 念出来 -> 继续听。
+    var listenMode by listenModeState
+    var pendingUtterance by remember { mutableStateOf<String?>(null) }
+    val latestListenMode by rememberUpdatedState(listenMode)
+    val callModeController = remember {
+        CallModeController(voiceContext) { text ->
+            latestViewModel.sendIntent(HomeChatIntent.InputChanged(text))
+            pendingUtterance = text
+        }
+    }
+    // 页面销毁什么都不做：发言器和它的作用域都是进程级的。
+    // （之前在这里 stop()/cancel()，每回合都丢掉排队中的句子。）
+    // 是否正在播报：药丸按钮据此决定「停止说话」还是「关闭通话模式」
+    var agentSpeaking by remember { mutableStateOf(false) }
+
+    // —— 语音播报 ——
+    // 已经整体搬到 VoiceOutbox：HomeChatViewModel 把最终文本直接推给它，
+    // 这里只负责「挂上发言人」和「跟随通话模式开关」。不再从 UI 列表里推断文本。
+
+    // 定位权限：py_gps 工具要靠它读原始 GPS。系统权限弹窗只能从 Activity 拉起，
+    // Python 侧拿不到 Activity，所以在顶栏菜单里留一个入口。
+    val locationContext = LocalContext.current
+    var hasLocationAccess by remember {
+        mutableStateOf(
+            locationContext.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) ==
+                PackageManager.PERMISSION_GRANTED
+        )
+    }
+    val locationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        hasLocationAccess = granted
+        Toast.makeText(
+            locationContext,
+            if (granted) "Location access granted" else "Location access denied",
+            Toast.LENGTH_SHORT,
+        ).show()
+    }
+
+    // 转写文本要等它真的落进输入框状态再 Send，否则发出去的是上一轮草稿
+    LaunchedEffect(pendingUtterance, uiState.input, uiState.isGenerating) {
+        val utterance = pendingUtterance ?: return@LaunchedEffect
+        if (uiState.isGenerating) return@LaunchedEffect
+        if (uiState.input.trim() == utterance.trim()) {
+            pendingUtterance = null
+            latestViewModel.sendIntent(HomeChatIntent.Send)
+        }
+    }
+    LaunchedEffect(listenMode) {
+        com.niki914.zafiro.app.audio.VoiceOutbox.attach(voiceContext)
+        com.niki914.zafiro.app.audio.VoiceOutbox.enabled = listenMode
+        com.niki914.zafiro.app.audio.VoiceOutbox.beginTurn()
+    }
+
+    // 回合结束 -> 把麦克风交还通话模式。
+    // 每识别完一句话控制器就 pause()，而 resume() 以前只有 25 秒的看门狗在调，
+    // 听感上就是「回答完这句它就不理我了」。这里补回那一环：
+    // 没在念 -> 直接恢复；正在念 -> 等队列念完（onSpeechIdle）再恢复。
+    var wasGenerating by remember { mutableStateOf(uiState.isGenerating) }
+    LaunchedEffect(uiState.isGenerating) {
+        val outbox = com.niki914.zafiro.app.audio.VoiceOutbox
+        if (!latestListenMode) {
+            outbox.onSpeechIdle = null
+            wasGenerating = uiState.isGenerating
+            return@LaunchedEffect
+        }
+        outbox.onSpeechIdle = { callModeController.resume() }
+        // 只有「真的开始念」才静音：生成思考的那几秒仍然在听，
+        // 于是用户接着说的下一句（比如「顺便八点提醒我跑步」）不会掉进空窗。
+        outbox.onSpeechStart = { }
+        // 麦克风一直在听：把即将念出的文字交给控制器，用来丢掉「听见自己」的转写
+        outbox.onSpoken = { spoken -> callModeController.noteSpoken(spoken) }
+        // 只在「真的从生成中走到结束」时才恢复收音。
+        // 之前写成「只要当前不在生成就 resume」，于是打开通话模式的那一瞬间就调了一次，
+        // 把正在工作的识别器状态抹成「没在听」，tick 立刻再开一个 -> error=5 风暴，
+        // 识别器被打坏，之后就再也听不见人说话（日志里连续 3 秒每 250ms 一次 error=5）。
+        val justFinished = wasGenerating && !uiState.isGenerating
+        wasGenerating = uiState.isGenerating
+        if (justFinished) {
+            // 回合结束了：把还没念完的尾巴发出去，再等它念完才恢复收音
+            outbox.flush()
+            kotlinx.coroutines.delay(400)
+            if (!outbox.isBusy()) callModeController.resume()
+        }
+    }
+
+    // 打断只在戴耳机时启用：外放会让麦克风听见 agent 自己，产生自我打断。
+    // 有耳机（有线/蓝牙/USB）时，用户说话就是真的在说话。
+    LaunchedEffect(listenMode) {
+        // 真正读「当前声音从哪儿出去」：配了耳机 ≠ 声音走耳机。
+        // 外放时开打断，麦克风会听见 agent 自己，把每条回答都掐掉。
+        fun hasEarphones(): Boolean = runCatching {
+            val fmt = android.media.AudioFormat.Builder()
+                .setEncoding(android.media.AudioFormat.ENCODING_PCM_16BIT)
+                .setSampleRate(16_000)
+                .setChannelMask(android.media.AudioFormat.CHANNEL_OUT_MONO)
+                .build()
+            val attrs = android.media.AudioAttributes.Builder()
+                .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH)
+                .build()
+            val track = android.media.AudioTrack.Builder()
+                .setAudioFormat(fmt)
+                .setAudioAttributes(attrs)
+                .setBufferSizeInBytes(4096)
+                .setTransferMode(android.media.AudioTrack.MODE_STATIC)
+                .build()
+            val routed = runCatching { track.routedDevice?.type }.getOrNull()
+            runCatching { track.release() }
+            routed == android.media.AudioDeviceInfo.TYPE_WIRED_HEADPHONES ||
+                routed == android.media.AudioDeviceInfo.TYPE_WIRED_HEADSET ||
+                routed == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
+                routed == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+                routed == android.media.AudioDeviceInfo.TYPE_USB_HEADSET
+        }.getOrDefault(false)
+
+        // 打断暂时关闭：即使戴耳机，麦克风仍会收到足够强的信号（耳机漏音、
+        // 呼吸、环境），把正在念的回答掐掉。等有真正的回声消除再打开。
+        // 想打断时点药丸即可（只停播，不关通话模式）。
+        callModeController.bargeIn = false
+        callModeController.onBargeIn = {
+            // 只有真的在放声音才算打断。否则这句话直接交给识别器，不能被吞掉。
+            if (!voiceSpeaker.isBusy()) {
+                false
+            } else {
+                speechCancelled = true
+                voiceSpeaker.stop()
+                callModeController.setSpeaking(false)
+                callModeController.listenNow()
+                true
+            }
+        }
+        voiceSpeaker.note("barge-in=" + callModeController.bargeIn)
+    }
+
+    LaunchedEffect(listenMode) {
+        if (listenMode) callModeController.start() else callModeController.stop()
+
+        // 思考强度跟着模式走：通话模式降到 minimal，退出时还原用户原来的值。
+        // 这样打字时仍然是 high，戴上耳机说话时才变快，不用改配置也不用重启。
+        runCatching {
+            val cfg = XRepo.llmConfigs.active() ?: return@runCatching
+            if (listenMode) {
+                if (savedThinkingLevel == null) savedThinkingLevel = cfg.thinkingLevel
+                if (cfg.thinkingLevel != VOICE_THINKING_LEVEL) {
+                    XRepo.llmConfigs.upsert(cfg.copy(thinkingLevel = VOICE_THINKING_LEVEL))
+                }
+            } else {
+                val restore = savedThinkingLevel
+                savedThinkingLevel = null
+                // 只在「当前值还是我们改的那档」时还原：用户若在通话模式期间手动改过，
+                // 那是他的新选择，别用旧值覆盖掉。
+                if (restore != null &&
+                    cfg.thinkingLevel == VOICE_THINKING_LEVEL &&
+                    cfg.thinkingLevel != restore
+                ) {
+                    XRepo.llmConfigs.upsert(cfg.copy(thinkingLevel = restore))
+                }
+            }
+        }
+    }
+    DisposableEffect(Unit) {
+        onDispose { callModeController.release() }
+    }
+    // 生成期间闭麦：省电，也避免把自己的念话/环境声当输入
+    LaunchedEffect(uiState.isGenerating) {
+        if (uiState.isGenerating) callModeController.pause()
+    }
+
     LaunchedEffect(Unit) {
         latestViewModel.sendIntent(HomeChatIntent.RefreshConfigs)
     }
@@ -383,6 +668,7 @@ fun HomePageContent(
         settingsMenuLabel,
         titleContent,
         uiState.isConfigMenuVisible,
+        uiState.voiceMode,
     ) {
         PageChromeContribution(
             titleContent = titleContent,
@@ -407,6 +693,64 @@ fun HomePageContent(
                             latestViewModel.sendIntent(HomeChatIntent.DismissConfigMenu)
                         }
                         latestViewModel.sendIntent(HomeChatIntent.NewConversation)
+                    },
+                ),
+                PageChromeMenuItem(
+                    key = "voice_mode",
+                    title = if (uiState.voiceMode) "Voice replies: on" else "Voice replies: off",
+                    onClick = {
+                        if (latestUiState.isConfigMenuVisible) {
+                            latestViewModel.sendIntent(HomeChatIntent.DismissConfigMenu)
+                        }
+                        latestViewModel.sendIntent(HomeChatIntent.ToggleVoiceMode)
+                    },
+                ),
+                PageChromeMenuItem(
+                    key = "listen_mode",
+                    // 不带 on/off：这个弹层打开后不会重绘，写状态就是在撒谎。
+                    // 真实状态看 composer 里的药丸（红色 Listening）。
+                    title = "Listen mode",
+                    onClick = {
+                        if (latestUiState.isConfigMenuVisible) {
+                            latestViewModel.sendIntent(HomeChatIntent.DismissConfigMenu)
+                        }
+                        val next = !listenMode
+                        val granted = locationContext.checkSelfPermission(
+                            Manifest.permission.RECORD_AUDIO,
+                        ) == PackageManager.PERMISSION_GRANTED
+                        if (next && !granted) {
+                            Toast.makeText(
+                                locationContext,
+                                "Microphone permission needed",
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                        } else {
+                            // 真正的 start/stop 由 LaunchedEffect(listenMode) 负责，这里只翻开关
+                            listenMode = next
+                            if (!next) {
+                                // 关掉通话模式要立刻静音，不然它还在念上一条
+                                voiceSpeaker.stop()
+                            }
+                            Toast.makeText(
+                                locationContext,
+                                if (next) "Listening - ask away" else "Listen mode off",
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                        }
+                    },
+                ),
+                PageChromeMenuItem(
+                    key = "location_access",
+                    title = if (hasLocationAccess) "Location access: on" else "Location access: off",
+                    onClick = {
+                        if (latestUiState.isConfigMenuVisible) {
+                            latestViewModel.sendIntent(HomeChatIntent.DismissConfigMenu)
+                        }
+                        if (hasLocationAccess) {
+                            Toast.makeText(locationContext, "Location already granted", Toast.LENGTH_SHORT).show()
+                        } else {
+                            locationPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+                        }
                     },
                 ),
                 PageChromeMenuItem(
@@ -493,6 +837,25 @@ fun HomePageContent(
         onContentTap = dismissInputFocus,
         onInputChange = { value ->
             viewModel.sendIntent(HomeChatIntent.InputChanged(value))
+        },
+        onToggleVoiceMode = { viewModel.sendIntent(HomeChatIntent.ToggleVoiceMode) },
+        onInterruptSpeech = {
+            speechCancelled = true
+            voiceSpeaker.stop()
+            if (listenMode) callModeController.resume()
+        },
+        listenMode = listenMode,
+        agentSpeaking = agentSpeaking,
+        // 药丸就是一个开关：点一下关掉（并立刻静音），再点一下打开。
+        // 不做「先停播再关麦」的花样 —— 用户要的是确定的行为。
+        onPillTap = {
+            com.niki914.zafiro.app.audio.VoiceOutbox.stop()
+            listenMode = !listenMode
+        },
+        onToggleListenMode = {
+            val next = !listenMode
+            if (!next) voiceSpeaker.stop()
+            listenMode = next
         },
         onSendClick = {
             val query = uiState.input.trim()
@@ -816,6 +1179,12 @@ private fun HomePageContentBody(
     onToggleActionRow: (Long, ActionSource) -> Unit,
     turnBranches: Map<Long, TurnBranchState> = emptyMap(),
     onSwitchTurnBranch: (Long, Int) -> Unit = { _, _ -> },
+    onToggleVoiceMode: () -> Unit = {},
+    onInterruptSpeech: () -> Unit = {},
+    listenMode: Boolean = false,
+    onToggleListenMode: () -> Unit = {},
+    agentSpeaking: Boolean = false,
+    onPillTap: () -> Unit = {},
 ) {
 
     // 底部避让总高：composer 底距 + 实测高度 + 统一视觉间距。列表贴底留白与箭头
@@ -994,6 +1363,13 @@ private fun HomePageContentBody(
                 pendingImages = pendingImages,
                 pendingFiles = pendingFiles,
                 onAttachImageClick = { attachSheetVisible = true },
+                voiceMode = uiState.voiceMode,
+                onToggleVoiceMode = onToggleVoiceMode,
+                onInterruptSpeech = onInterruptSpeech,
+                listenMode = listenMode,
+                onToggleListenMode = onToggleListenMode,
+                agentSpeaking = agentSpeaking,
+                onPillTap = onPillTap,
                 backdrop = chatBackdrop,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)

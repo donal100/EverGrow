@@ -1,6 +1,22 @@
 package com.niki914.zafiro.app.ui.content
 
 import android.graphics.BitmapFactory
+import android.Manifest
+import android.content.pm.PackageManager
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.ui.platform.LocalContext
+import com.niki914.zafiro.app.audio.VoiceRecorder
+import com.niki914.zafiro.app.audio.QwenAsrClient
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
+import java.io.File
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.LocalIndication
 import com.kyant.backdrop.Backdrop
@@ -495,25 +511,128 @@ fun LiquidChatComposer(
     pendingImages: List<HomeChatImage> = emptyList(),
     pendingFiles: List<HomeChatFile> = emptyList(),
     onAttachImageClick: () -> Unit = {},
+    voiceMode: Boolean = false,
+    onToggleVoiceMode: () -> Unit = {},
+    /** 用户想立刻打断播报时调用（点麦克风、关掉 Speak 开关都算）。 */
+    onInterruptSpeech: () -> Unit = {},
+    /** 通话模式是否正在听：药丸改成醒目的「Listening」，不用翻菜单也知道状态。 */
+    listenMode: Boolean = false,
+    /** 点药丸：听的时候关掉通话模式，不听的时候切换「念回复」。 */
+    onToggleListenMode: () -> Unit = {},
+    /** agent 正在播报。此时点药丸只是「别说了」，不该顺手关掉通话模式。 */
+    agentSpeaking: Boolean = false,
+    /** 药丸被点击：由上层决定是「停播」还是「关掉通话模式」。 */
+    onPillTap: () -> Unit = {},
     backdrop: Backdrop? = null,
 ) {
     // 发送按钮恒亮：无文本点击时触发 Toast 提示，能不能点不靠颜色表达。
     // contextProgress 为 null（无记账）时不画环。
     val contentColor = MaterialTheme.colorScheme.primary
 
+    // 语音：录音 -> Qwen ASR 转写 -> 文本落进输入框（不自动发送，留给用户改）。
+    val appContext = LocalContext.current.applicationContext
+    val voiceRecorder = remember { VoiceRecorder(appContext) }
+    val asrClient = remember { QwenAsrClient(QwenAsrClient.keyFileFor(appContext)) }
+    val voiceScope = rememberCoroutineScope()
+    var isRecording by remember { mutableStateOf(false) }
+    var isTranscribing by remember { mutableStateOf(false) }
+    var pendingSend by remember { mutableStateOf(false) }
+    DisposableEffect(Unit) {
+        onDispose { voiceRecorder.release() }
+    }
+    // 转写完直接发：必须在 value 落到父级状态之后才触发 onSendClick，
+    // 否则发出去的会是上一轮的旧草稿。用 pendingSend 做闸门，等重组后再放行。
+    LaunchedEffect(pendingSend, value, isGenerating) {
+        if (pendingSend && !isGenerating && value.isNotBlank()) {
+            pendingSend = false
+            onSendClick()
+        }
+    }
+
+    fun beginRecording() {
+        isRecording = runCatching { voiceRecorder.start() }.isSuccess
+        val hint = if (isRecording) "Recording… tap again to stop" else "Could not start recording"
+        Toast.makeText(appContext, hint, Toast.LENGTH_SHORT).show()
+    }
+    val recordPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted) {
+            beginRecording()
+        } else {
+            Toast.makeText(appContext, "Microphone permission denied", Toast.LENGTH_SHORT).show()
+        }
+    }
+    fun stopAndTranscribe() {
+        val saved = voiceRecorder.stop()
+        isRecording = false
+        if (saved == null) {
+            Toast.makeText(appContext, "Recording too short, discarded", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val (file, ms) = saved
+        if (!asrClient.hasKey()) {
+            Toast.makeText(
+                appContext,
+                "No ASR key. Recording kept at " + file.name,
+                Toast.LENGTH_LONG,
+            ).show()
+            return
+        }
+        isTranscribing = true
+        voiceScope.launch {
+            val result = asrClient.transcribe(file)
+            isTranscribing = false
+            result.onSuccess { text ->
+                if (text.isBlank()) {
+                    Toast.makeText(appContext, "No speech detected", Toast.LENGTH_SHORT).show()
+                } else {
+                    // 只在末尾追加，避免覆盖用户已经输入的草稿
+                    val merged = if (value.isBlank()) text else value.trimEnd() + " " + text
+                    onValueChange(merged)
+                    pendingSend = true
+                    Toast.makeText(
+                        appContext,
+                        "Transcribed " + (ms / 1000.0) + "s - sending to DeepSeek",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                }
+            }.onFailure { err ->
+                // 录音文件保留在 recordings/，可直接重试
+                Toast.makeText(
+                    appContext,
+                    "Transcription failed: " + (err.message ?: "unknown"),
+                    Toast.LENGTH_LONG,
+                ).show()
+            }
+        }
+    }
+
+    fun toggleRecording() {
+        if (isTranscribing) return
+        // 点麦克风 = 打断：先把正在念的声音掐掉，再开录。电话里也是这个手感。
+        if (!isRecording) onInterruptSpeech()
+        if (isRecording) {
+            stopAndTranscribe()
+            return
+        }
+        val granted =
+            appContext.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+        if (granted) {
+            beginRecording()
+        } else {
+            recordPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
+
     // 展开唯一信号源：布局行数。观测到 lineCount > 1 即锁住展开态；
     // expanded 本身改变测量宽度，对称条件会振荡，故回落只看文本清空。
     // 同一 BasicTextField + 同一玻璃容器，切换不丢焦点、键盘不收起。
-    var expandedLatch by remember { mutableStateOf(false) }
-    val expanded = value.contains('\n') || expandedLatch
-    val onLayout: (TextLayoutResult?) -> Unit = { layout ->
-        if (layout != null && !expandedLatch && layout.lineCount > 1) {
-            expandedLatch = true
-        }
-    }
-    LaunchedEffect(value) {
-        if (value.isEmpty()) expandedLatch = false
-    }
+    // 常驻「两行」布局（Grok 的做法）：文本区独占一行、控件排到下面一行。
+    // 单行布局里文本区只能吃按钮剩下的宽度 —— 加上麦克风后它被压到只剩几十 dp，
+    // 占位符直接被截断成 "Type a …"。这里改为始终展开。
+    val expanded = true
+    val onLayout: (TextLayoutResult?) -> Unit = { }
 
     @Composable
     fun attachButton() {
@@ -524,6 +643,7 @@ fun LiquidChatComposer(
         ) {
             ActionBarButton(
                 onClick = onAttachImageClick,
+                sizeSp = COMPOSER_BUTTON_SP,
                 modifier = Modifier.offset(x = (-6).dp),
             ) {
                 Icon(
@@ -549,6 +669,7 @@ fun LiquidChatComposer(
             ActionBarButton(
                 onClick = if (isGenerating) onStopClick else onSendClick,
                 enabled = true,
+                sizeSp = COMPOSER_BUTTON_SP,
                 // 环画在按钮自己的 modifier 上：与按钮同心，跟着 offset 一起走。
                 modifier = Modifier
                     .offset(x = 6.dp)
@@ -573,6 +694,69 @@ fun LiquidChatComposer(
         }
     }
 
+    @Composable
+    fun speakPill() {
+        // 只有一个开关：听/不听。开着就意味着「会听我说话，也会念回答」。
+        // 之前这里是「Speak / Listening」两套语义塞进一个按钮，颜色还各表一义，
+        // 用户（和我）都猜不准下一次点击会发生什么。
+        val on = listenMode
+        val bg = if (on) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.surfaceVariant
+        val fg = if (on) MaterialTheme.colorScheme.onError else MaterialTheme.colorScheme.onSurfaceVariant
+        Row(
+            modifier = Modifier
+                .offset(x = (-4).dp)
+                .clip(CircleShape)
+                .background(bg)
+                .clickable { onPillTap() }
+                .padding(horizontal = 14.dp, vertical = 9.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Icon(
+                imageVector = Icons.Default.GraphicEq,
+                contentDescription = if (on) "Listening on" else "Listening off",
+                tint = fg,
+                modifier = Modifier.size(18.dp),
+            )
+            Text(
+                text = if (on) "Listening" else "Listen",
+                color = fg,
+                style = MaterialTheme.typography.labelLarge,
+            )
+        }
+    }
+
+    @Composable
+    fun speakButton() {
+        // 录音中把图标染成 error 色：没有这个反馈，用户无法判断是否正在采集。
+        val tint = when {
+            isRecording -> MaterialTheme.colorScheme.error
+            isTranscribing -> MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+            else -> MaterialTheme.colorScheme.primary
+        }
+        CompositionLocalProvider(LocalContentColor provides tint) {
+            ActionBarButton(
+                onClick = { toggleRecording() },
+                sizeSp = COMPOSER_BUTTON_SP,
+                modifier = Modifier.offset(x = (-6).dp),
+            ) {
+                if (isTranscribing) {
+                    LoadingIndicator(
+                        modifier = Modifier
+                            .size(24.dp)
+                            .clearAndSetSemantics { contentDescription = "Transcribing Button" },
+                        color = tint,
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.Default.Mic,
+                        contentDescription = if (isRecording) "Stop Recording Button" else "Speak Button",
+                    )
+                }
+            }
+        }
+    }
+
     // 唯一 BasicTextField 实例：expandedLayout 只切换容器内部布局，不重建字段
     LiquidTextField(
         value = value,
@@ -588,15 +772,25 @@ fun LiquidChatComposer(
         expandedLayout = expanded,
         expandedActionsRow = {
             attachButton()
+            speakButton()
+            speakPill()
             sendButton()
         },
         backdrop = backdrop,
         glassStyle = LiquidGlassPresets.ComposerBar,
         modifier = modifier.fillMaxWidth(),
         leadingContent = { attachButton() },
-        trailingContent = { sendButton() },
+        trailingContent = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                speakButton()
+                sendButton()
+            }
+        },
     )
 }
+
+/** composer 里按钮的直径（sp）。默认 48 太大，这里取一半多点：再小就低于可点面积。 */
+private const val COMPOSER_BUTTON_SP = 30f
 
 /** 上下文环底轨的不透明度。 */
 private const val CONTEXT_RING_TRACK_ALPHA = 0.22f
@@ -605,7 +799,7 @@ private const val CONTEXT_RING_TRACK_ALPHA = 0.22f
 private val ContextRingStroke = 2.dp
 
 /** 发送按钮的圆直径，与 ActionBarButton 的 requiredSize 同口径（sp 换算）。 */
-private val ContextRingButtonDiameter = 48.sp
+private val ContextRingButtonDiameter = COMPOSER_BUTTON_SP.sp
 
 /**
  * 在发送按钮边缘画一圈上下文占用环。
