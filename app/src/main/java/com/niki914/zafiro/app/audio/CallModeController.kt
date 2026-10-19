@@ -20,7 +20,14 @@ class CallModeController(
     var onBargeIn: (() -> Boolean)? = null
 
     fun start() {
-        ListenBus.onSentence = { text -> if (!echoLikely(text)) onUtterance(text) }
+        ListenBus.onSentence = { text ->
+            when {
+                // 正在播报时，麦克风听到的多半是我自己；外放没有打断功能，直接丢弃
+                VoiceOutbox.isBusy() -> log("dropped while speaking: " + text.take(40))
+                echoLikely(text) -> log("dropped as echo: " + text.take(40))
+                else -> onUtterance(text)
+            }
+        }
         // 打断只在戴耳机时启用。
         // 外放时麦克风必然听见喇叭，任何判断都会在「真打断」和「听见自己」之间摇摆
         // —— 这是行业里通行的取舍：Deepgram 等给出的生产建议就是外放走半双工、
@@ -81,10 +88,11 @@ class CallModeController(
 
     private fun echoLikely(heard: String): Boolean {
         if (lastSpoken.isEmpty()) return false
-        if (System.currentTimeMillis() - lastSpokenAt > 25_000) return false
+        if (System.currentTimeMillis() - lastSpokenAt > 45_000) return false
         val h = heard.lowercase().split(Regex("[^a-z0-9\u4e00-\u9fff]+")).filter { it.length > 1 }
         val s = recent.toString().lowercase()
         if (h.isEmpty()) return false
-        return h.count { s.contains(it) }.toFloat() / h.size >= 0.6f
+        // 实测我自己的话被听回来时，只能对上三四成词，0.6 太严
+        return h.count { s.contains(it) }.toFloat() / h.size >= 0.4f
     }
 }
