@@ -612,15 +612,31 @@ fun HomePageContent(
     // 打断只在戴耳机时启用：外放会让麦克风听见 agent 自己，产生自我打断。
     // 有耳机（有线/蓝牙/USB）时，用户说话就是真的在说话。
     LaunchedEffect(listenMode) {
+        // 真正读「当前声音从哪儿出去」：配了耳机 ≠ 声音走耳机。
+        // 外放时开打断，麦克风会听见 agent 自己，把每条回答都掐掉。
         fun hasEarphones(): Boolean = runCatching {
-            val am = voiceContext.getSystemService(android.content.Context.AUDIO_SERVICE)
-                as android.media.AudioManager
-            am.getDevices(android.media.AudioManager.GET_DEVICES_OUTPUTS).any {
-                it.type == android.media.AudioDeviceInfo.TYPE_WIRED_HEADPHONES ||
-                    it.type == android.media.AudioDeviceInfo.TYPE_WIRED_HEADSET ||
-                    it.type == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
-                    it.type == android.media.AudioDeviceInfo.TYPE_USB_HEADSET
-            }
+            val fmt = android.media.AudioFormat.Builder()
+                .setEncoding(android.media.AudioFormat.ENCODING_PCM_16BIT)
+                .setSampleRate(16_000)
+                .setChannelMask(android.media.AudioFormat.CHANNEL_OUT_MONO)
+                .build()
+            val attrs = android.media.AudioAttributes.Builder()
+                .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH)
+                .build()
+            val track = android.media.AudioTrack.Builder()
+                .setAudioFormat(fmt)
+                .setAudioAttributes(attrs)
+                .setBufferSizeInBytes(4096)
+                .setTransferMode(android.media.AudioTrack.MODE_STATIC)
+                .build()
+            val routed = runCatching { track.routedDevice?.type }.getOrNull()
+            runCatching { track.release() }
+            routed == android.media.AudioDeviceInfo.TYPE_WIRED_HEADPHONES ||
+                routed == android.media.AudioDeviceInfo.TYPE_WIRED_HEADSET ||
+                routed == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
+                routed == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+                routed == android.media.AudioDeviceInfo.TYPE_USB_HEADSET
         }.getOrDefault(false)
 
         callModeController.bargeIn = hasEarphones()

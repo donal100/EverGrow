@@ -414,8 +414,8 @@ class CallModeController(
         const val RESUME_DELAY_MS = 900L
         /** 看门狗间隔。 */
         const val TICK_MS = 250L
-        /** 打断需要连续多少拍强信号：20 × 250ms ≈ 5 秒。 */
-        const val BARGE_IN_TICKS = 20
+        /** 打断需要连续多少拍强信号：12 × 250ms ≈ 3 秒。 */
+        const val BARGE_IN_TICKS = 12
         /** 提示音：ACK，12% 音量，60ms。 */
         const val CUE_VOLUME = 12
         const val CUE_MS = 60
