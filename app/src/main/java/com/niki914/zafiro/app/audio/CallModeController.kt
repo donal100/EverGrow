@@ -128,7 +128,10 @@ class CallModeController(
             try {
                 if (!active || shutDown) return
                 loudTicks = if (recorder.isLoud()) loudTicks + 1 else 0
-                spikeTicks = if (recorder.isSpike()) spikeTicks + 1 else 0
+                // 只在「播报中」才累计打断计数。之前不管有没有在播都在累加，
+                // 于是环境声早就把计数攒满，回答一开始就立刻被判成打断 ——
+                // 表现就是每条回答在 2 秒内被掐掉。
+                spikeTicks = if (speakingNow && recorder.isSpike()) spikeTicks + 1 else 0
 
                 // 打断必须非常保守：连续 20 拍（20 × 250ms ≈ 5 秒）强信号才算数。
                 // 代价是要一直说上五秒才会打断；好处是外放回声、关门声、背景噪声
@@ -324,6 +327,8 @@ class CallModeController(
     /** 播报开始/结束时告诉控制器，打断逻辑靠它判断。 */
     fun setSpeaking(speaking: Boolean) {
         speakingNow = speaking
+        // 每次开始播报都从零开始数
+        if (speaking) spikeTicks = 0
     }
 
     /** 让回声过滤器知道 agent 刚说过什么。 */
