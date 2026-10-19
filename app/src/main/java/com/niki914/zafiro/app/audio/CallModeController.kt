@@ -9,6 +9,7 @@ import android.os.Looper
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
+import kotlinx.coroutines.launch
 import java.io.File
 
 /**
@@ -63,6 +64,17 @@ class CallModeController(
      * 媒体音量绝不碰：跑步时用户多半在放音乐。
      */
     private val audio = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+
+    /** 削头修复用的重听：把整段音频交给 Qwen，拿更完整的转写。 */
+    private val asr by lazy { QwenAsrClient(QwenAsrClient.keyFileFor(context)) }
+    private val repairScope = kotlinx.coroutines.CoroutineScope(
+        kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO,
+    )
+
+    /** 自己的提示音（STREAM_MUSIC 上播，不受静音系统音量影响）。 */
+    private val tone by lazy {
+        runCatching { android.media.ToneGenerator(AudioManager.STREAM_MUSIC, CUE_VOLUME) }.getOrNull()
+    }
     private val mutedStreams = HashMap<Int, Int>()
 
     /** 同一路麦克风的备份录音：只有用户说「你听错了」时才需要它。 */
@@ -74,7 +86,14 @@ class CallModeController(
     private val restart = Runnable { startListening() }
 
     private val listener = object : RecognitionListener {
-        override fun onReadyForSpeech(params: Bundle?) = log("ready")
+        override fun onReadyForSpeech(params: Bundle?) {
+            log("ready")
+            // Google 自带的提示音又尖又响，而且关不掉；这里放一个很轻的短促提示，
+            // 音量压在 30%，听感像耳机里的一下轻响。
+            runCatching {
+                tone?.startTone(android.media.ToneGenerator.TONE_PROP_ACK, CUE_MS)
+            }
+        }
         override fun onBeginningOfSpeech() {
             recorder.markSpeechStart()
             log("speech start")
@@ -103,6 +122,13 @@ class CallModeController(
             }
             // 6/7（no match / speech timeout）是正常的「静默」结果；5 是客户端状态没准备好。
             // 都退避重开，连续失败就拉长间隔，避免把识别器打成 error=5 风暴。
+            // 6/7（没听到 / 静默超时）是常态：立刻重开，绝不退避。
+            // 之前的退避会累积到 2.7 秒，用户在这段空窗里开口，前面几个词就丢了。
+            if (error == 6 || error == 7) {
+                errorStreak = 0
+                schedule(0L)
+                return
+            }
             errorStreak = (errorStreak + 1).coerceAtMost(5)
             schedule((300L * errorStreak * errorStreak).coerceAtMost(3000L))
         }
@@ -140,8 +166,26 @@ class CallModeController(
             }
             lastUtterance = text
             // 先把音频存档（连同这次识别结果），万一听错了还能回头重听
-            runCatching { recorder.saveUtterance(text) }
+            val clipped = runCatching { recorder.wasClipped() }.getOrDefault(false)
+            val clip = runCatching { recorder.saveUtterance(text) }.getOrNull()
             pause()
+
+            // 识别器重开的空窗吃掉了开头：用我们手里的完整音频重听一遍，
+            // 拿更完整的文本再交出去（只在这种情况多花约 1 秒）。
+            if (clipped && clip != null && asr.hasKey()) {
+                log("clipped start detected -> re-transcribing the full clip")
+                repairScope.launch {
+                    val repaired = runCatching { asr.transcribe(clip) }.getOrNull()?.getOrNull()
+                    val finalText = repaired?.trim().orEmpty()
+                    if (finalText.length > text.length) {
+                        log("repair: " + text.length + " -> " + finalText.length + " chars")
+                        main.post {
+                            if (active) onUtterance(finalText)
+                        }
+                    }
+                }
+                return
+            }
             main.removeCallbacks(watchdog)
             main.postDelayed(watchdog, WATCHDOG_MS)
             onUtterance(text)
@@ -154,7 +198,6 @@ class CallModeController(
         paused = false
         lastUtterance = ""
         // 上一次若是异常退出，音量可能还停在 0：进来先把状态清干净
-        restoreCues()
         main.post {
             if (recognizer == null) {
                 recognizer = SpeechRecognizer.createSpeechRecognizer(context).also {
@@ -171,7 +214,6 @@ class CallModeController(
         active = false
         paused = false
         listening = false
-        restoreCues()
         main.removeCallbacks(restart)
         main.removeCallbacks(watchdog)
         main.post {
@@ -187,7 +229,6 @@ class CallModeController(
         if (!active || paused) return
         paused = true
         listening = false
-        restoreCues()
         main.removeCallbacks(restart)
         main.post { runCatching { recognizer?.cancel() } }
         log("pause")
@@ -239,7 +280,6 @@ class CallModeController(
         if (!active || paused || listening) return
         val r = recognizer ?: return
         listening = true
-        muteCues()
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(
                 RecognizerIntent.EXTRA_LANGUAGE_MODEL,
@@ -260,26 +300,7 @@ class CallModeController(
             .onFailure { log("startListening failed: " + it.message) }
     }
 
-    private fun muteCues() {
-        val am = audio ?: return
-        for (stream in intArrayOf(AudioManager.STREAM_SYSTEM, AudioManager.STREAM_NOTIFICATION)) {
-            runCatching {
-                val current = am.getStreamVolume(stream)
-                if (current > 0 && !mutedStreams.containsKey(stream)) {
-                    mutedStreams[stream] = current
-                    am.setStreamVolume(stream, 0, 0)
-                }
-            }
-        }
-    }
 
-    private fun restoreCues() {
-        val am = audio ?: return
-        mutedStreams.forEach { (stream, volume) ->
-            runCatching { am.setStreamVolume(stream, volume, 0) }
-        }
-        mutedStreams.clear()
-    }
 
     private fun log(msg: String) {
         runCatching {
@@ -291,6 +312,9 @@ class CallModeController(
     private companion object {
         const val POST_ERROR_RESTART_MS = 350L
         const val RESUME_DELAY_MS = 900L
+        /** 提示音时长（毫秒）与音量（0-100）。 */
+        const val CUE_MS = 90
+        const val CUE_VOLUME = 30
         const val GRACE_MS = 1_500L
         const val WATCHDOG_MS = 25_000L
         const val COMPLETE_SILENCE_MS = 900L
