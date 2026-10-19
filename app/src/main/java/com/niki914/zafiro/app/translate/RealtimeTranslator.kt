@@ -62,9 +62,11 @@ class RealtimeTranslator(
     fun start() {
         if (running) return
         running = true
-        openSocket()
-        startMic()
+        // 顺序很重要：必须先建连接、发 session.update、等 session.updated，
+        // 才能开始送麦克风音频。否则服务器已经「开始处理音频」，再改配置会被拒绝：
+        // "Cannot update 'input_audio_format' after session has started processing audio."
         startPlayback()
+        openSocket()
     }
 
     private fun openSocket() {
@@ -107,6 +109,10 @@ class RealtimeTranslator(
     private fun handleEvent(text: String) {
         val ev = JSONObject(text)
         when (ev.optString("type")) {
+            "session.updated" -> {
+                onState("ready")
+                startMic()
+            }
             "response.created" -> speaking = true
             "response.audio.delta" -> {
                 val b64 = ev.optString("delta")
@@ -127,7 +133,11 @@ class RealtimeTranslator(
     }
 
     /** 麦克风：手机自带麦克风，16kHz 单声道，100ms 一片直接推上去。 */
+    @Volatile private var micStarted = false
+
     private fun startMic() {
+        if (micStarted) return
+        micStarted = true
         val minBuf = AudioRecord.getMinBufferSize(
             16_000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
         val rec = runCatching {
