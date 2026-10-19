@@ -244,6 +244,21 @@ class HomeChatViewModel internal constructor(
         if (isLoadedConversation) conversationBeingLoaded = null
 
         val last = target.lastOrNull()
+
+        // —— 语音出口 ——
+        // 这里拿到的是权威的会话内容（不是 UI 列表的推断），把最后一条回答的全文
+        // 推给 VoiceOutbox，由它算出「新增部分」交给 TTS。没有 id、没有基线猜测。
+        runCatching {
+            val spokenText = last?.blocks
+                ?.filterIsInstance<com.niki914.zafiro.app.ui.model.home.HomeChatBlock.Text>()
+                ?.joinToString("\n") { it.text }
+                ?.trim()
+                .orEmpty()
+            if (spokenText.isNotEmpty() && !loaded) {
+                com.niki914.zafiro.app.audio.VoiceOutbox.onAssistantText(spokenText)
+            }
+        }
+
         var paceBlockIndex = -1
         var paceKind: String? = null
         if (last != null && !loaded) {

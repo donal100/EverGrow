@@ -474,105 +474,8 @@ fun HomePageContent(
     var agentSpeaking by remember { mutableStateOf(false) }
 
     // —— 语音播报 ——
-    // 关键：只念「这一轮生成期间新增的正文」。
-    // 之前的做法都是「找最后一条有文本的消息」，而生成刚起步时最后一条往往还是
-    // 上一条回答 —— 于是把旧回答念出来。这里改成记下开播那一刻最后一条的 id 与长度，
-    // 之后只念「同一轮里超出那个长度的部分」，或者「新出现的那一条」。
-    LaunchedEffect(uiState.isGenerating, uiState.voiceMode, uiState.turns.size) {
-        if (!uiState.isGenerating) return@LaunchedEffect
-        if (!uiState.voiceMode && !latestListenMode) {
-            voiceSpeaker.note("stream: generation started but voice is off")
-            return@LaunchedEffect
-        }
-        if (streamingJob?.isActive == true) return@LaunchedEffect
-        speechCancelled = false
-
-        fun turnText(turn: HomeChatTurn?): String = turn
-            ?.blocks
-            ?.filterIsInstance<HomeChatBlock.Text>()
-            ?.joinToString("\n") { it.text }
-            ?.trim()
-            .orEmpty()
-
-        // 开播基线：此刻「最后一条」是上一条回答（新提问还没追加进列表）
-        val baseTurnId = latestUiState.turns.lastOrNull()?.id ?: -1L
-        val baseText = turnText(latestUiState.turns.lastOrNull())
-        val baseLength = baseText.length
-        voiceSpeaker.note("stream: baseline turn=" + baseTurnId + " len=" + baseLength)
-
-        streamingJob = voiceScope.launch {
-            callModeController.pause()
-            callModeController.setSpeaking(true)
-            agentSpeaking = true
-            var spoken = 0
-            var stableFor = 0
-            try {
-                while (true) {
-                    if (speechCancelled) break
-                    val snapshot = latestUiState
-                    val last = snapshot.turns.lastOrNull()
-                    val full = turnText(last)
-                    val sameTurn = last?.id == baseTurnId
-                    // 本轮新增的正文：同一轮取超出的尾部，新一轮取全文
-                    // 同一轮里文本可能是「追加」，也可能是「被替换」（实测 "Four." -> "Five."
-                    // 长度一样，靠长度判断会得出「没有新内容」）。只有真以基线开头才切尾。
-                    val fresh = when {
-                        !sameTurn -> full
-                        full.startsWith(baseText) -> full.substring(baseLength)
-                        else -> full
-                    }
-
-                    val cut = sentenceEnd(fresh, spoken)
-                    if (cut > spoken && (!snapshot.isGenerating || cut - spoken >= MIN_SPEECH_CHUNK)) {
-                        val chunk = fresh.substring(spoken, cut).trim()
-                        spoken = cut
-                        stableFor = 0
-                        if (chunk.isNotEmpty()) {
-                            callModeController.noteSpoken(chunk)
-                            voiceSpeaker.submit(chunk)
-                        }
-                        continue
-                    }
-                    if (!snapshot.isGenerating && fresh.length <= spoken) {
-                        // 生成结束后，正文还要过一会儿才被追加进列表（实测「Four.」晚了约 1 秒）。
-                        // 之前只等 400ms 就放弃 —— 表现就是「一个字都没念」。
-                        stableFor += 120
-                        if (stableFor >= 4000) break
-                    } else {
-                        stableFor = 0
-                    }
-                    delay(120)
-                }
-
-                if (!speechCancelled) {
-                    val last = latestUiState.turns.lastOrNull()
-                    val full = turnText(last)
-                    val sameTurn = last?.id == baseTurnId
-                    val fresh = when {
-                        !sameTurn -> full
-                        full.startsWith(baseText) -> full.substring(baseLength)
-                        else -> full
-                    }
-                    if (fresh.length > spoken) {
-                        val rest = fresh.substring(spoken).trim()
-                        if (rest.isNotEmpty()) {
-                            callModeController.noteSpoken(rest)
-                            voiceSpeaker.submit(rest)
-                            spoken = fresh.length
-                        }
-                    }
-                }
-                voiceSpeaker.awaitIdle()
-                voiceSpeaker.note("stream done: spokenChars=" + spoken)
-            } finally {
-                agentSpeaking = false
-                callModeController.setSpeaking(false)
-                streamingTurnId = -1L
-                streamingJob = null
-                if (latestListenMode) callModeController.resume()
-            }
-        }
-    }
+    // 已经整体搬到 VoiceOutbox：HomeChatViewModel 把最终文本直接推给它，
+    // 这里只负责「挂上发言人」和「跟随通话模式开关」。不再从 UI 列表里推断文本。
 
     // 定位权限：py_gps 工具要靠它读原始 GPS。系统权限弹窗只能从 Activity 拉起，
     // Python 侧拿不到 Activity，所以在顶栏菜单里留一个入口。
@@ -603,6 +506,12 @@ fun HomePageContent(
             latestViewModel.sendIntent(HomeChatIntent.Send)
         }
     }
+    LaunchedEffect(listenMode) {
+        com.niki914.zafiro.app.audio.VoiceOutbox.attach(voiceContext)
+        com.niki914.zafiro.app.audio.VoiceOutbox.enabled = listenMode
+        com.niki914.zafiro.app.audio.VoiceOutbox.beginTurn()
+    }
+
     // 打断只在戴耳机时启用：外放会让麦克风听见 agent 自己，产生自我打断。
     // 有耳机（有线/蓝牙/USB）时，用户说话就是真的在说话。
     LaunchedEffect(listenMode) {
@@ -908,10 +817,8 @@ fun HomePageContent(
         // 药丸就是一个开关：点一下关掉（并立刻静音），再点一下打开。
         // 不做「先停播再关麦」的花样 —— 用户要的是确定的行为。
         onPillTap = {
-            val next = !listenMode
-            speechCancelled = true
-            voiceSpeaker.stop()
-            listenMode = next
+            com.niki914.zafiro.app.audio.VoiceOutbox.stop()
+            listenMode = !listenMode
         },
         onToggleListenMode = {
             val next = !listenMode
