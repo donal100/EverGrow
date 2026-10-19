@@ -65,6 +65,14 @@ class CallModeController(
      */
     private val audio = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
 
+    /**
+     * 自己的提示音：TONE_PROP_ACK，12% 音量，走媒体流。
+     * 12% 是实测选出来的 —— 安静时听得见，不刺耳；街上风大可能要往上调。
+     */
+    private val cue by lazy {
+        runCatching { android.media.ToneGenerator(AudioManager.STREAM_MUSIC, CUE_VOLUME) }.getOrNull()
+    }
+
     private val mutedStreams = HashMap<Int, Int>()
 
     /**
@@ -83,7 +91,10 @@ class CallModeController(
     private val restart = Runnable { startListening() }
 
     private val listener = object : RecognitionListener {
-        override fun onReadyForSpeech(params: Bundle?) = log("ready")
+        override fun onReadyForSpeech(params: Bundle?) {
+            log("ready")
+            runCatching { cue?.startTone(android.media.ToneGenerator.TONE_PROP_ACK, CUE_MS) }
+        }
         override fun onBeginningOfSpeech() {
             recorder.markSpeechStart()
             log("speech start")
@@ -309,6 +320,9 @@ class CallModeController(
     private companion object {
         const val POST_ERROR_RESTART_MS = 350L
         const val RESUME_DELAY_MS = 900L
+        /** 提示音：ACK，12% 音量，60ms。 */
+        const val CUE_VOLUME = 12
+        const val CUE_MS = 60
         const val GRACE_MS = 1_500L
         const val WATCHDOG_MS = 25_000L
         const val COMPLETE_SILENCE_MS = 900L
