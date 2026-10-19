@@ -22,7 +22,12 @@ class CallModeController(
     fun start() {
         ListenBus.onSentence = { text -> if (!echoLikely(text)) onUtterance(text) }
         ListenBus.onSpeechStart = { heard ->
-            if (VoiceOutbox.isBusy() && heard.length >= 3) VoiceOutbox.stop()
+            // 打断也要过回声过滤：麦克风会听见我自己，半个词就足以把回答掐掉
+            // （实测识别出一个 "here" 就停了整句）。
+            if (VoiceOutbox.isBusy() && heard.length >= 4 && !echoLikely(heard)) {
+                log("barge-in on: " + heard.take(40))
+                VoiceOutbox.stop()
+            }
         }
         val intent = Intent(context, ListenService::class.java).setAction(ListenService.ACTION_START)
         runCatching { ContextCompat.startForegroundService(context, intent) }
@@ -45,6 +50,13 @@ class CallModeController(
     }
 
     fun release() = stop()
+
+    private fun log(msg: String) {
+        runCatching {
+            val f = java.io.File(context.filesDir, "call_mode.log")
+            f.appendText(System.currentTimeMillis().toString() + "  " + msg + "\n")
+        }
+    }
 
     private fun echoLikely(heard: String): Boolean {
         if (lastSpoken.isEmpty()) return false
