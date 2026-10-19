@@ -22,6 +22,9 @@
          于是 MANAGE_EXTERNAL_STORAGE（全盘访问）也一起去掉了。 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- 自己的日历：精确闹钟（12+ 可被用户拒绝，代码里退化成不精确）+ 开机后重排 -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <uses-feature
         android:name="android.hardware.microphone"
@@ -165,5 +168,22 @@
             android:exported="false"
             android:foregroundServiceType="location" />
 
-    </application>
+            <receiver
+            android:name=".schedule.ScheduleReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.niki914.zafiro.action.SCHEDULE_FIRE" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name=".schedule.BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+            </intent-filter>
+        </receiver>
+
+</application>
 </manifest>
