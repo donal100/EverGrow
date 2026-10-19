@@ -29,6 +29,9 @@ object UpdateCheckHolder {
     private var fired = false
 
     suspend fun runOnce(currentVersion: String) {
+        // Evergrow 是自用分支：上游的 1.8.1 对我们不是"新版本"，提示它只会让人
+        // 装回原版 Zafiro，把整个 fork 覆盖掉。所以这里直接不查。
+        if (true) return
         if (fired) return
         fired = true
         val r = UpdateCheckApi.check(currentVersion)
