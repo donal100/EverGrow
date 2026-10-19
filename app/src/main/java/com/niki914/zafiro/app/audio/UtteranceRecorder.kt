@@ -32,6 +32,18 @@ class UtteranceRecorder(private val filesDir: File) {
     private var speechStart = -1L
     private var speechEnd = -1L
 
+    /**
+     * VAD：我们自己判断「有人开始说话 / 说完了」。识别器只在有语音时打开，
+     * 不再靠定时轮询 —— 这正是首词被吃掉的根源。
+     * 回调在录音线程上执行，调用方自己切主线程。
+     */
+    @Volatile
+    var onVoiceActivity: ((Boolean) -> Unit)? = null
+
+    private var speakingDetected = false
+    private var aboveCount = 0
+    private var belowCount = 0
+
 
     private var record: AudioRecord? = null
     private var thread: Thread? = null
@@ -70,6 +82,25 @@ class UtteranceRecorder(private val filesDir: File) {
             while (running) {
                 val n = runCatching { rec.read(buf, 0, buf.size) }.getOrDefault(-1)
                 if (n <= 0) continue
+                var peak = 0
+                for (i in 0 until n) {
+                    val v = kotlin.math.abs(buf[i].toInt())
+                    if (v > peak) peak = v
+                }
+                if (peak > ENERGY_ON) {
+                    aboveCount++
+                    belowCount = 0
+                } else if (peak < ENERGY_OFF) {
+                    belowCount++
+                    aboveCount = 0
+                }
+                if (!speakingDetected && aboveCount >= ONSET_FRAMES) {
+                    speakingDetected = true
+                    runCatching { onVoiceActivity?.invoke(true) }
+                } else if (speakingDetected && belowCount >= END_FRAMES) {
+                    speakingDetected = false
+                    runCatching { onVoiceActivity?.invoke(false) }
+                }
                 synchronized(lock) {
                     for (i in 0 until n) {
                         ring[writeIndex] = buf[i]
@@ -191,6 +222,12 @@ class UtteranceRecorder(private val filesDir: File) {
     private companion object {
         const val DIR = "utt"
         const val KEEP_FILES = 8
+        /** VAD 阈值（PCM16）。正常说话 2000-8000，静音 <300。 */
+        const val ENERGY_ON = 900
+        const val ENERGY_OFF = 450
+        /** 每帧约 100ms：1 帧起说话即触发，6 帧（≈600ms）静音算说完。 */
+        const val ONSET_FRAMES = 1
+        const val END_FRAMES = 6
         const val MAX_AGE_MS = 20 * 60 * 1000L
     }
 }

@@ -121,11 +121,10 @@ class CallModeController(
             }
             // 6/7（no match / speech timeout）是正常的「静默」结果；5 是客户端状态没准备好。
             // 都退避重开，连续失败就拉长间隔，避免把识别器打成 error=5 风暴。
-            // 6/7（没听到 / 静默超时）是常态：立刻重开，绝不退避。
-            // 之前的退避会累积到 2.7 秒，用户在这段空窗里开口，前面几个词就丢了。
+            // 6/7（没听到 / 静默超时）：识别器已经自己结束了，VAD 会在下次开口时重开它。
+            // 这里不再定时重开 —— 那正是「空窗里说话被吃掉」的来源。
             if (error == 6 || error == 7) {
                 errorStreak = 0
-                schedule(0L)
                 return
             }
             errorStreak = (errorStreak + 1).coerceAtMost(5)
@@ -144,25 +143,17 @@ class CallModeController(
             if (!active) return
             if (System.currentTimeMillis() < ignoreUntilMs) {
                 log("dropped transcript inside the post-speech grace window")
-                schedule(POST_ERROR_RESTART_MS)
                 return
             }
-            if (text.length < 2) {
-                schedule(POST_ERROR_RESTART_MS)
-                return
-            }
+            if (text.length < 2) return
             // 回声：麦克风会把自己刚念的内容听回来。只比开头 8 个字不够 ——
             // 实测把「That's the first time the loop has behaved…」整句收了进来。
             // 改成词集合重合度：超过一半的词一样，就当回声丢掉。
             if (lastSpokenPrefix.isNotEmpty() && looksLikeEcho(text, lastSpokenPrefix)) {
                 log("dropped echo-like transcript: " + text.take(60))
-                schedule(POST_ERROR_RESTART_MS)
                 return
             }
-            if (text == lastUtterance) {
-                schedule(POST_ERROR_RESTART_MS)
-                return
-            }
+            if (text == lastUtterance) return
             lastUtterance = text
             // 先把音频存档（连同这次识别结果），万一听错了还能回头重听。
             // 注意：这里**不**自动重听。「削头就用 Qwen 补一遍」那条自动路径已经移除 ——
@@ -189,8 +180,20 @@ class CallModeController(
                 }
             }
             log("start")
+            // 自己听：只有检测到有人说话才开识别器。空闲时它完全关着 ——
+            // 没有超时、没有空窗、也没有那串空闲提示音。
+            recorder.onVoiceActivity = { speaking ->
+                main.post {
+                    if (!active || paused) return@post
+                    if (speaking) {
+                        if (!listening) log("vad: speech onset -> open recogniser")
+                        startListening()
+                    } else {
+                        log("vad: speech end")
+                    }
+                }
+            }
             recorder.start()
-            startListening()
         }
     }
 
@@ -205,6 +208,7 @@ class CallModeController(
             runCatching { recognizer?.cancel() }
             runCatching { recognizer?.destroy() }
             recognizer = null
+            recorder.onVoiceActivity = null
             recorder.stop()
             log("stop")
         }
@@ -224,11 +228,11 @@ class CallModeController(
         if (!active) return
         paused = false
         listening = false
+        // 静音窗口：TTS 尾音还在空气里时，VAD 可能把余音当成人声
         ignoreUntilMs = System.currentTimeMillis() + GRACE_MS
         main.removeCallbacks(watchdog)
         main.removeCallbacks(restart)
-        // 稍等再开麦：TTS 的尾音还没散干净就收音会把结尾吃回去
-        main.postDelayed(restart, RESUME_DELAY_MS)
+        // 不再主动开麦：VAD 检测到用户开口才开。这是「不轮询」的关键。
         log("resume")
     }
 
