@@ -2,6 +2,7 @@ package com.niki914.zafiro.app.audio
 
 import android.content.Context
 import android.media.AudioManager
+import android.media.ToneGenerator
 import android.content.Intent
 import android.media.AudioFormat
 import android.os.Bundle
@@ -35,6 +36,10 @@ class ListenEngine(
     private val main = Handler(Looper.getMainLooper())
     private val recorder = UtteranceRecorder(context.filesDir)
     private val queue = ArrayBlockingQueue<ByteArray>(64)
+    /** 提示音：开听一声、收到一句再一声。用 TONE_PROP_ACK，短而轻。 */
+    private val cue by lazy { runCatching { ToneGenerator(AudioManager.STREAM_SYSTEM, 40) }.getOrNull() }
+
+    private fun beep() = runCatching { cue?.startTone(ToneGenerator.TONE_PROP_ACK, 60) }
 
     @Volatile private var active = false
     @Volatile private var out: FileOutputStream? = null
@@ -131,6 +136,7 @@ class ListenEngine(
             )
             recognizer = r
             log("session open")
+            beep()
         }.onFailure { log("open failed: " + it.message) }
     }
 
@@ -159,6 +165,7 @@ class ListenEngine(
             if (t.length >= 2 && t != lastFinal) {
                 lastFinal = t
                 log("sentence: " + t.take(70))
+                beep()
                 onSentence(t)
             }
             // 关键：一条会话只交付一句话，随后就自己关掉了。
