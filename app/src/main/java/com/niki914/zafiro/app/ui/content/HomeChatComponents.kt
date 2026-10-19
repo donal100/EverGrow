@@ -696,9 +696,10 @@ fun LiquidChatComposer(
 
     @Composable
     fun speakPill() {
-        // 照 Grok 的做法：带文字的 Speak 开关。开着时实心高亮——
-        // 光看图标形状在 48dp 下分辨不出开关，配一个词才一眼看懂。
-        val on = voiceMode || listenMode
+        // 只有一个开关：听/不听。开着就意味着「会听我说话，也会念回答」。
+        // 之前这里是「Speak / Listening」两套语义塞进一个按钮，颜色还各表一义，
+        // 用户（和我）都猜不准下一次点击会发生什么。
+        val on = listenMode
         val bg = if (on) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.surfaceVariant
         val fg = if (on) MaterialTheme.colorScheme.onError else MaterialTheme.colorScheme.onSurfaceVariant
         Row(
@@ -713,13 +714,12 @@ fun LiquidChatComposer(
         ) {
             Icon(
                 imageVector = Icons.Default.GraphicEq,
-                contentDescription = if (on) "Voice Mode On Button" else "Voice Mode Off Button",
+                contentDescription = if (on) "Listening on" else "Listening off",
                 tint = fg,
                 modifier = Modifier.size(18.dp),
             )
             Text(
-                // 通话模式优先：一直听着和「会念回复」是两件事，状态不能混着显示
-                text = if (listenMode) "Listening" else "Speak",
+                text = if (on) "Listening" else "Listen",
                 color = fg,
                 style = MaterialTheme.typography.labelLarge,
             )
