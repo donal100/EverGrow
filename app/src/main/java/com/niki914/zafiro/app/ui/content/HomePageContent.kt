@@ -525,6 +525,9 @@ fun HomePageContent(
             return@LaunchedEffect
         }
         outbox.onSpeechIdle = { callModeController.resume() }
+        // 只有「真的开始念」才静音：生成思考的那几秒仍然在听，
+        // 于是用户接着说的下一句（比如「顺便八点提醒我跑步」）不会掉进空窗。
+        outbox.onSpeechStart = { callModeController.pause() }
         // 只在「真的从生成中走到结束」时才恢复收音。
         // 之前写成「只要当前不在生成就 resume」，于是打开通话模式的那一瞬间就调了一次，
         // 把正在工作的识别器状态抹成「没在听」，tick 立刻再开一个 -> error=5 风暴，

@@ -251,7 +251,9 @@ class CallModeController(
             // 注意：这里**不**自动重听。「削头就用 Qwen 补一遍」那条自动路径已经移除 ——
             // 背景音乐会让能量检测误判，每次都多花一次 Qwen 调用。要重听就手动来。
             runCatching { recorder.saveUtterance(text) }
-            pause()
+            // 不再在这里 pause()：以前一收到转写就停麦克风，于是「说完一句、我还在想」的那几秒
+            // 里说的话全部丢失（实测丢了 "at eight PM to go for a run"）。
+            // 现在只有真的开始播报时才静音 —— 由 VoiceOutbox 触发。
             main.removeCallbacks(watchdog)
             main.postDelayed(watchdog, WATCHDOG_MS)
             onUtterance(text)

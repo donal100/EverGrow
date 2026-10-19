@@ -46,6 +46,9 @@ object VoiceOutbox {
     /** 一句话念完（队列空了）时回调；通话模式用它重新开麦。 */
     var onSpeechIdle: (() -> Unit)? = null
 
+    /** 即将开始播报时回调；通话模式用它先把麦克风静音（否则会听见自己）。 */
+    var onSpeechStart: (() -> Unit)? = null
+
     fun attach(context: Context) {
         if (tuningPath == null) {
             tuningPath = java.io.File(context.filesDir, "voice_tuning.txt").absolutePath
@@ -129,6 +132,7 @@ object VoiceOutbox {
     /** 只发「有字」的内容：纯标点、纯空白一律丢掉（TTS 会 400）。 */
     private fun submitSafe(chunk: String) {
         if (chunk.none { it.isLetterOrDigit() }) return
+        runCatching { onSpeechStart?.invoke() }
         speaker?.submit(chunk)
     }
 
