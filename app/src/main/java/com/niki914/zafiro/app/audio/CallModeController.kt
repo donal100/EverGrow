@@ -130,9 +130,10 @@ class CallModeController(
                 loudTicks = if (recorder.isLoud()) loudTicks + 1 else 0
                 spikeTicks = if (recorder.isSpike()) spikeTicks + 1 else 0
 
-                // 打断必须非常保守：要 5 拍（≈1.25 秒）持续「强信号」。
-                // 之前的 2 拍会被自己的外放声音/环境噪声误触发，把整条回答掐掉。
-                if (speakingNow && bargeIn && spikeTicks >= 5) {
+                // 打断必须非常保守：连续 20 拍（20 × 250ms ≈ 5 秒）强信号才算数。
+                // 代价是要一直说上五秒才会打断；好处是外放回声、关门声、背景噪声
+                // 都不可能掐掉一条正在念的回答。
+                if (speakingNow && bargeIn && spikeTicks >= BARGE_IN_TICKS) {
                     val handled = onBargeIn?.invoke() ?: false
                     if (handled) {
                         log("tick: barge in (floor=" + recorder.floor() + ")")
@@ -413,6 +414,8 @@ class CallModeController(
         const val RESUME_DELAY_MS = 900L
         /** 看门狗间隔。 */
         const val TICK_MS = 250L
+        /** 打断需要连续多少拍强信号：20 × 250ms ≈ 5 秒。 */
+        const val BARGE_IN_TICKS = 20
         /** 提示音：ACK，12% 音量，60ms。 */
         const val CUE_VOLUME = 12
         const val CUE_MS = 60
