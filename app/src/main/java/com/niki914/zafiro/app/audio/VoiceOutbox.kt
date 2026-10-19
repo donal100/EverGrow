@@ -88,16 +88,28 @@ object VoiceOutbox {
         maybeFlush()
     }
 
-    /** 攒够了才发：句末标点，或者长到不适合再等。 */
+    /**
+     * 攒够了才发。目标是「一段话一个音频文件」，而不是「一个句子一个文件」：
+     * 每发一次就是一次独立的 Qwen 请求、一个独立的 wav、一次独立的播放，
+     * 接缝处语调会重置，听起来像换了口型。
+     *
+     * 规则：
+     *  - 段落结束（空行）立刻发；
+     *  - 句末标点且已经攒到 MIN_CLIP_CHARS（约两句话）才发；
+     *  - 超过 MAX_CLIP_CHARS 无论如何先发，长回答不能等太久；
+     *  - 回合结束时 flush() 把尾巴发掉。
+     */
     private fun maybeFlush() {
-        val text = pending.toString()
-        val trimmed = text.trim()
+        val trimmed = pending.toString().trim()
         if (trimmed.isEmpty()) {
             pending.setLength(0)
             return
         }
+        val endsParagraph = pending.contains("\n\n") || pending.contains("\n\r")
         val endsSentence = trimmed.last() in ".!?;:。！？；：\n"
-        if (!endsSentence && trimmed.length < 160) return
+        val longEnough = trimmed.length >= MIN_CLIP_CHARS
+        val tooLong = trimmed.length >= MAX_CLIP_CHARS
+        if (!(endsParagraph || (endsSentence && longEnough) || tooLong)) return
         pending.setLength(0)
         submitSafe(trimmed)
     }
@@ -113,6 +125,13 @@ object VoiceOutbox {
         val text = pending.toString().trim()
         pending.setLength(0)
         if (text.isNotEmpty()) submitSafe(text)
+    }
+
+    private companion object {
+        /** 一段音频至少这么长（约两句话，8-10 秒语音）才发出去，接缝更少。 */
+        const val MIN_CLIP_CHARS = 200
+        /** 上限：再长就先发，别让长回答迟迟不出声。 */
+        const val MAX_CLIP_CHARS = 420
     }
 
     /** 新一轮开始：允许把同样的文本再念一次。 */
