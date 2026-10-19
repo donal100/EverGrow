@@ -142,6 +142,9 @@ class ListenEngine(
                 log("sentence: " + t.take(70))
                 onSentence(t)
             }
+            // 关键：一条会话只交付一句话，随后就自己关掉了。
+            // 之前没有重开，于是「第二句永远听不到」——日志里只有第一次的 session open。
+            if (active) main.postDelayed({ if (active) openSession() }, 60)
         }
 
         private fun first(b: Bundle?): String = runCatching {
