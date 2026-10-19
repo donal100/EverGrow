@@ -88,7 +88,17 @@ class ListenEngine(
         }.also { it.isDaemon = true; it.start() }
     }
 
+    @Volatile private var opening = false
+
     private fun openSession() {
+        if (!active) return
+        // 防重叠：上一次会话可能还在收尾，立刻再开会让识别器报 error=11（server disconnected）
+        if (opening) return
+        opening = true
+        try { doOpen() } finally { opening = false }
+    }
+
+    private fun doOpen() {
         if (!active) return
         runCatching {
             closeSession()
@@ -126,7 +136,7 @@ class ListenEngine(
         override fun onError(error: Int) {
             log("error=" + error)
             // 任何错误都只做一件事：重开一条会话。没有别的分支。
-            if (active) main.postDelayed({ if (active) openSession() }, 300)
+            if (active) main.postDelayed({ if (active) openSession() }, 600)
         }
 
         override fun onPartialResults(partialResults: Bundle?) {
@@ -144,7 +154,7 @@ class ListenEngine(
             }
             // 关键：一条会话只交付一句话，随后就自己关掉了。
             // 之前没有重开，于是「第二句永远听不到」——日志里只有第一次的 session open。
-            if (active) main.postDelayed({ if (active) openSession() }, 60)
+            if (active) main.postDelayed({ if (active) openSession() }, 350)
         }
 
         private fun first(b: Bundle?): String = runCatching {
