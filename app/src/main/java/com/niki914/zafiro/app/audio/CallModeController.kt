@@ -82,6 +82,9 @@ class CallModeController(
     @Volatile
     private var tickCooldownUntil = 0L
 
+    /** 上一次真正调用 startListening 的时刻，防止连续重开。 */
+    private var lastStartMs = 0L
+
     /** 打断阈值（拍数），可在 voice_tuning.txt 里覆盖。 */
     @Volatile
     private var bargeInTicks = BARGE_IN_TICKS
@@ -198,6 +201,14 @@ class CallModeController(
             // 这里不再定时重开 —— 那正是「空窗里说话被吃掉」的来源。
             if (error == 6 || error == 7) {
                 errorStreak = 0
+                return
+            }
+            // error 5 = ERROR_CLIENT：上一次 startListening 还没收尾就又开了一次。
+            // 这时立刻重开只会继续失败，先把识别器停干净再退避重试。
+            if (error == 5) {
+                runCatching { recognizer?.cancel() }
+                errorStreak = (errorStreak + 1).coerceAtMost(4)
+                schedule(400L * errorStreak)
                 return
             }
             errorStreak = (errorStreak + 1).coerceAtMost(5)
@@ -336,7 +347,10 @@ class CallModeController(
     fun resume() {
         if (!active) return
         paused = false
-        listening = false
+        // 注意：不要动 listening。resume 只表示「可以继续听了」，并不代表
+        // 当前没有识别器在跑。把它抹成 false 会让 tick 再开一个识别器，
+        // 第二个立刻返回 error=5（客户端状态错误），识别器就此坏掉。
+
         // 静音窗口：TTS 尾音还在空气里时，VAD 可能把余音当成人声
         ignoreUntilMs = System.currentTimeMillis() + GRACE_MS
         main.removeCallbacks(watchdog)
@@ -394,6 +408,9 @@ class CallModeController(
     private fun startListening() {
         if (!active || paused || listening) return
         val r = recognizer ?: return
+        val now = System.currentTimeMillis()
+        if (now - lastStartMs < MIN_START_GAP_MS) return
+        lastStartMs = now
         listening = true
         muteCues()
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
@@ -449,6 +466,7 @@ class CallModeController(
         const val RESUME_DELAY_MS = 900L
         /** 看门狗间隔。 */
         const val TICK_MS = 250L
+        const val MIN_START_GAP_MS = 600L
         /** 打断需要连续多少拍强信号：12 × 250ms ≈ 3 秒。 */
         const val BARGE_IN_TICKS = 12
         /** 提示音：ACK，12% 音量，60ms。 */

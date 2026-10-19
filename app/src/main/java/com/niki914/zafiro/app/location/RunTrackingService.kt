@@ -45,6 +45,12 @@ class RunTrackingService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         return when (intent?.action) {
             ACTION_STOP -> {
+                // Android 的硬性契约：凡是 startForegroundService() 启动的，5 秒内必须
+                // 调一次 startForeground()，不管这个 action 打算干什么。以前这里直接
+                // stopSelf()，系统于是判定「前台服务没起来」，抛出
+                // ForegroundServiceDidNotStartInTimeException 把整个进程杀掉 ——
+                // 表现就是「点停止跑步，应用崩了」。
+                runCatching { startForeground(NOTIFICATION_ID, buildNotification()) }
                 stopTracking()
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
@@ -79,6 +85,7 @@ class RunTrackingService : Service() {
         }
         // 新的一趟：清空旧点，避免两次跑步混在一条轨迹里
         pointsFile(this).writeText("")
+        runCatching { activeMarker(this).writeText(System.currentTimeMillis().toString()) }
 
         val l = object : LocationListener {
             override fun onLocationChanged(location: Location) {
@@ -95,12 +102,16 @@ class RunTrackingService : Service() {
     }
 
     private fun stopTracking() {
-        val l = listener ?: return
+        val l = listener ?: run {
+            runCatching { activeMarker(this).delete() }
+            return
+        }
         listener = null
         runCatching {
             val lm = getSystemService(Context.LOCATION_SERVICE) as? LocationManager
             lm?.removeUpdates(l)
         }
+        runCatching { activeMarker(this).delete() }
         log("tracking stopped")
     }
 
@@ -125,6 +136,8 @@ class RunTrackingService : Service() {
             pointsFile(this).appendText(line)
         }
     }
+
+    private fun activeMarker(ctx: Context) = File(ctx.filesDir, "run_active")
 
     private fun buildNotification(): Notification {
         val open = PendingIntent.getActivity(

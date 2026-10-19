@@ -516,14 +516,22 @@ fun HomePageContent(
     // 每识别完一句话控制器就 pause()，而 resume() 以前只有 25 秒的看门狗在调，
     // 听感上就是「回答完这句它就不理我了」。这里补回那一环：
     // 没在念 -> 直接恢复；正在念 -> 等队列念完（onSpeechIdle）再恢复。
-    LaunchedEffect(uiState.isGenerating, listenMode) {
+    var wasGenerating by remember { mutableStateOf(uiState.isGenerating) }
+    LaunchedEffect(uiState.isGenerating) {
         val outbox = com.niki914.zafiro.app.audio.VoiceOutbox
-        if (!listenMode) {
+        if (!latestListenMode) {
             outbox.onSpeechIdle = null
+            wasGenerating = uiState.isGenerating
             return@LaunchedEffect
         }
         outbox.onSpeechIdle = { callModeController.resume() }
-        if (!uiState.isGenerating) {
+        // 只在「真的从生成中走到结束」时才恢复收音。
+        // 之前写成「只要当前不在生成就 resume」，于是打开通话模式的那一瞬间就调了一次，
+        // 把正在工作的识别器状态抹成「没在听」，tick 立刻再开一个 -> error=5 风暴，
+        // 识别器被打坏，之后就再也听不见人说话（日志里连续 3 秒每 250ms 一次 error=5）。
+        val justFinished = wasGenerating && !uiState.isGenerating
+        wasGenerating = uiState.isGenerating
+        if (justFinished) {
             kotlinx.coroutines.delay(400)
             if (!outbox.isBusy()) callModeController.resume()
         }
