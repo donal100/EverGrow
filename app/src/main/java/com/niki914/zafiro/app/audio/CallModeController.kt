@@ -117,6 +117,7 @@ class CallModeController(
      * 不依赖 VAD 的上升沿 —— 那东西一旦卡住（房间一直不够安静），就再也不会触发。
      */
     private var loudTicks = 0
+    private var spikeTicks = 0
 
     /**
      * 电平看门狗。要求连续两拍（约 500ms）都在阈值之上才算「有人在说话」：
@@ -127,13 +128,16 @@ class CallModeController(
             try {
                 if (!active || shutDown) return
                 loudTicks = if (recorder.isLoud()) loudTicks + 1 else 0
+                spikeTicks = if (recorder.isSpike()) spikeTicks + 1 else 0
 
-                // 打断：真正在放声音时，用户连说两拍才掐掉播放
-                if (speakingNow && bargeIn && loudTicks >= 2) {
+                // 打断必须非常保守：要 5 拍（≈1.25 秒）持续「强信号」。
+                // 之前的 2 拍会被自己的外放声音/环境噪声误触发，把整条回答掐掉。
+                if (speakingNow && bargeIn && spikeTicks >= 5) {
                     val handled = onBargeIn?.invoke() ?: false
                     if (handled) {
                         log("tick: barge in (floor=" + recorder.floor() + ")")
                         loudTicks = 0
+                        spikeTicks = 0
                     }
                 }
                 // 正常收音

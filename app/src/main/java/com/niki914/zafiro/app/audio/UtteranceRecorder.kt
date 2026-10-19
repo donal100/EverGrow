@@ -146,6 +146,9 @@ class UtteranceRecorder(private val filesDir: File) {
     /** 现在是否有人声（电平触发用）。 */
     fun isLoud(): Boolean = running && currentLevel > dynamicThreshold()
 
+    /** 打断用的「强信号」判断：2.5 倍阈值。普通环境噪声达不到，真说话可以。 */
+    fun isSpike(): Boolean = running && currentLevel > dynamicThreshold() * 2.5
+
     /** 当前噪声底，诊断用。 */
     fun floor(): Int = noiseFloor.toInt()
 
