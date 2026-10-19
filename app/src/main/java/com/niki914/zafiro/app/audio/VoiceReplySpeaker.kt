@@ -201,8 +201,10 @@ class VoiceReplySpeaker(private val appContext: Context) {
      * 现在是「边合成边放」，首段音频 ≈1.2s 就到了，长回答的差别更明显。
      * 返回 false 表示这条路走不通（没网/模型拒绝），调用方退回原来的合成到文件。
      */
-    private fun streamAndPlay(text: String): Boolean {
+    private fun streamAndPlay(rawText: String): Boolean {
         if (cancelled) return true
+        // 先把数字/时间/单位展开成英文单词，否则多语种音色会把 "0.96 km" 念成别的东西
+        val text = SpokenForm.of(rawText)
         if (text.length <= 12) return false
         val key = runCatching { File(appContext.filesDir, KEY_FILE).readText().trim() }.getOrNull()
         if (key.isNullOrEmpty()) return false
