@@ -83,12 +83,8 @@ class RunTrackingService : Service() {
             stopSelf()
             return
         }
-        // 新的一趟：追加一条开始标记，而不是清空文件。
-        // 清空会永久丢掉上一趟的轨迹（实测重启一次就把 0.96km 的原始记录抹了），
-        // 而 Python 侧只需要从最后一条标记之后开始算。
-        runCatching {
-            pointsFile(this).appendText("{\"event\":\"start\",\"t\":" + System.currentTimeMillis() + "}\n")
-        }
+        // 新的一趟从零开始：清空旧点。用户明确要的是「重启就是重来」。
+        pointsFile(this).writeText("")
         runCatching { activeMarker(this).writeText(System.currentTimeMillis().toString()) }
 
         val l = object : LocationListener {
