@@ -911,21 +911,13 @@ fun HomePageContent(
         },
         listenMode = listenMode,
         agentSpeaking = agentSpeaking,
+        // 药丸就是一个开关：点一下关掉（并立刻静音），再点一下打开。
+        // 不做「先停播再关麦」的花样 —— 用户要的是确定的行为。
         onPillTap = {
-            if (listenMode && voiceSpeaker.isBusy()) {
-                // 正在念：只停播，通话模式保持开启
-                speechCancelled = true
-                voiceSpeaker.stop()
-                callModeController.listenNow()
-            } else if (listenMode) {
-                // 已经安静：关掉通话模式
-                voiceSpeaker.stop()
-                listenMode = false
-            } else {
-                // 没在听：按原来的语义切换「念回复」
-                if (uiState.voiceMode) runCatching { voiceSpeaker.stop() }
-                latestViewModel.sendIntent(HomeChatIntent.ToggleVoiceMode)
-            }
+            val next = !listenMode
+            speechCancelled = true
+            voiceSpeaker.stop()
+            listenMode = next
         },
         onToggleListenMode = {
             val next = !listenMode
