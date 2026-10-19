@@ -1,30 +1,27 @@
 package com.niki914.zafiro.app.audio
 
 import android.content.Context
-import android.content.Intent
 import android.media.AudioManager
-import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.speech.RecognitionListener
-import android.speech.RecognizerIntent
-import android.speech.SpeechRecognizer
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import java.io.File
 
 /**
- * 通话模式（Listen mode）：像电话一样一直听着。
+ * 听写引擎 —— 刻意做简单。
  *
- * 职责只到「听懂一句话」为止 —— 转写出来的文本交给调用方（发消息），
- * 播放回复仍是 [VoiceReplySpeaker] 的事。这样两条链路各自可替换，
- * 也不会出现「听」和「说」互相抢麦克风。
+ * 旧版本用 Android 的 SpeechRecognizer：它自己判断句子在哪结束，我们自己也判断。
+ * 两套判断必然打架，一晚上出了三类 bug（error=5 风暴、说完立刻暂停、半句被重启丢掉）。
  *
- * 用系统 [SpeechRecognizer] 而不是自己开 AudioRecord + Qwen ASR：
- * 它自带端点检测（说完自动结束），这正是通话模式要的东西；自己写 VAD
- * 还得处理回声和设备差异。设备上的识别服务是 Google 的，可用。
+ * 现在的分工只有一句话：
+ *   能量检测（UtteranceRecorder）负责「哪一段是活」，
+ *   Qwen ASR 负责「这一段说了什么」。
+ * 没有别的状态机，没有 onEndOfSpeech/onResults 的时序博弈，也没有「重启识别器」这种动作。
  *
- * 回声处理：念回复时 pause()，念完 resume()。戴耳机时本来就没这问题，
- * 但外放时不停麦会把 agent 自己的声音当成用户输入。
+ * 代价：每句多约 1 秒、需要联网、每次几分钱。换来的是不会再因为状态错乱丢句子。
  */
 class CallModeController(
     private val context: Context,
@@ -32,469 +29,101 @@ class CallModeController(
 ) {
 
     private val main = Handler(Looper.getMainLooper())
-    private var recognizer: SpeechRecognizer? = null
-
-    /** 用户按开关打开时为 true；关掉后所有回调都变成空操作。 */
-    private var active = false
-
-    /** 自己念话（或等回复）时为 true：不收音，避免把自己的声音吃回去。 */
-    private var paused = false
-    private var lastUtterance = ""
-    private var lastSpokenPrefix = ""
-
-    /**
-     * 是否已经有一次识别在跑。SpeechRecognizer 不允许重叠调用：
-     * cancel() 还没落地就再 startListening() 会连发 ERROR_CLIENT(5)，
-     * 日志里那一串 error=5 就是这么来的 —— 一条都没真正开始听。
-     */
-    private var listening = false
-
-    /** 连续失败次数，用来退避；成功出结果就清零。 */
-    private var errorStreak = 0
-
-    /**
-     * 重新开麦后的静默窗口。TTS 尾音还在空气里/还在耳机漏音时，
-     * 识别器会先收到一段残缺的「自己」，这种结果不该当成用户说话。
-     */
-    private var ignoreUntilMs = 0L
-
-    /**
-     * 打断（barge-in）：念话期间仍然听，用户一开口就掐掉播放。
-     * 只在戴耳机时开启 —— 外放时麦克风会把 agent 自己的声音当成人声，自己打断自己。
-     */
-    @Volatile
-    var bargeIn = false
-
-    /**
-     * 用户开口打断时要做什么。返回 true 表示「确实打断了」；返回 false 就按正常收音处理 ——
-     * 否则用陈旧状态误判一次，这句话就被吞掉了（用户看到的就是「听不见我」）。
-     */
-    var onBargeIn: (() -> Boolean)? = null
-
-    /** agent 是否正在播报。 */
-    @Volatile
-    private var speakingNow = false
-
-    @Volatile
-    private var shutDown = false
-
-    /** 刚拿到结果后给 tick 的冷却（和回声静音窗口不是一回事，别混用）。 */
-    @Volatile
-    private var tickCooldownUntil = 0L
-
-    /** 上一次真正调用 startListening 的时刻，防止连续重开。 */
-    private var lastStartMs = 0L
-
-    /** 打断阈值（拍数），可在 voice_tuning.txt 里覆盖。 */
-    @Volatile
-    private var bargeInTicks = BARGE_IN_TICKS
-
-    /**
-     * 识别器每次开麦/收尾都有自己的提示音，通话模式不停地重开，于是「哔、哔、哔」。
-     * Android 没有关闭它的 API，只能在我们收音期间把系统/通知两路音量压到 0 ——
-     * 媒体音量绝不碰：跑步时用户多半在放音乐。
-     */
-    private val audio = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
-
-    /**
-     * 自己的提示音：TONE_PROP_ACK，12% 音量，走媒体流。
-     * 12% 是实测选出来的 —— 安静时听得见，不刺耳；街上风大可能要往上调。
-     */
-    private val cue by lazy {
-        runCatching { android.media.ToneGenerator(AudioManager.STREAM_MUSIC, CUE_VOLUME) }.getOrNull()
-    }
-
-    /**
-     * 静音模式：识别器每次开麦都会响提示音，Android 没有关闭它的 API。
-     * 唯一的办法是在收音期间把系统/通知两路音量压到 0；媒体音量绝不碰，
-     * 跑步时的音乐照常放。
-     */
-    private val mutedStreams = HashMap<Int, Int>()
-
-    /** 同一路麦克风的备份录音：只有用户说「你听错了」时才需要它。 */
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val recorder = UtteranceRecorder(context.filesDir)
+    private val asr = QwenAsrClient(File(context.filesDir, "qwen_asr_key.txt"))
 
-    /** 交出去之后等这么久还没人 resume() 就自己接上，避免卡死在「已暂停」。 */
-    private val watchdog = Runnable { resume() }
+    @Volatile private var active = false
+    @Volatile private var paused = false
+    @Volatile private var transcribing = false
+    private var lastText = ""
 
-    private val restart = Runnable { startListening() }
-
-    /**
-     * 电平触发的看门狗：每 250ms 看一眼「现在有没有人说话」，有就开麦。
-     * 不依赖 VAD 的上升沿 —— 那东西一旦卡住（房间一直不够安静），就再也不会触发。
-     */
-    private var loudTicks = 0
-    private var spikeTicks = 0
-
-    /**
-     * 电平看门狗。要求连续两拍（约 500ms）都在阈值之上才算「有人在说话」：
-     * 一次关门声、一下碰麦克风不会触发；音乐也不会，因为自适应噪声底会把阈值顶高。
-     */
-    private val tick = object : Runnable {
-        override fun run() {
-            try {
-                if (!active || shutDown) return
-                loudTicks = if (recorder.isLoud()) loudTicks + 1 else 0
-                // 只在「播报中」才累计打断计数。之前不管有没有在播都在累加，
-                // 于是环境声早就把计数攒满，回答一开始就立刻被判成打断 ——
-                // 表现就是每条回答在 2 秒内被掐掉。
-                spikeTicks = if (speakingNow && recorder.isSpike()) spikeTicks + 1 else 0
-
-                // 打断必须非常保守：连续 20 拍（20 × 250ms ≈ 5 秒）强信号才算数。
-                // 代价是要一直说上五秒才会打断；好处是外放回声、关门声、背景噪声
-                // 都不可能掐掉一条正在念的回答。
-                if (speakingNow && bargeIn && spikeTicks >= bargeInTicks) {
-                    val handled = onBargeIn?.invoke() ?: false
-                    if (handled) {
-                        log("tick: barge in (floor=" + recorder.floor() + ")")
-                        loudTicks = 0
-                        spikeTicks = 0
-                    }
-                }
-                // 正常收音
-                if (!paused && !listening && loudTicks >= 1 &&
-                    System.currentTimeMillis() >= tickCooldownUntil
-                ) {
-                    log("tick: loud -> open recogniser (floor=" + recorder.floor() + ")")
-                    startListening()
-                }
-            } catch (_: Throwable) {
-            }
-            if (active && !shutDown) main.postDelayed(this, TICK_MS)
-        }
-    }
-
-    private val listener = object : RecognitionListener {
-        override fun onReadyForSpeech(params: Bundle?) {
-            log("ready")
-            runCatching { cue?.startTone(android.media.ToneGenerator.TONE_PROP_ACK, CUE_MS) }
-        }
-        override fun onBeginningOfSpeech() {
-            recorder.markSpeechStart()
-            log("speech start")
-        }
-        override fun onRmsChanged(rmsdB: Float) = Unit
-        override fun onBufferReceived(buffer: ByteArray?) = Unit
-        override fun onEndOfSpeech() {
-            // 关键：这里不能把 listening 置 false。
-            // onEndOfSpeech 只表示「用户说完了」，识别器还在处理、结果还没回来；
-            // 一旦置 false，tick 会马上再开一个识别器，把正在处理的那半句丢掉
-            // —— 实测一句话里出现三次 "speech start"，最后只拿到 "seconds"。
-            recorder.markSpeechEnd()
-            log("speech end")
-        }
-
-        override fun onPartialResults(partialResults: Bundle?) {
-            // 只看最终结果：中间态会让 agent 收到半句话
-        }
-
-        override fun onEvent(eventType: Int, params: Bundle?) = Unit
-
-        override fun onError(error: Int) {
-            listening = false
-            log("error=" + error)
-            // 12 = LANGUAGE_NOT_SUPPORTED，13 = LANGUAGE_UNAVAILABLE：
-            // 这台机器没装离线模型，见到就当配置问题记一笔，不要死循环
-            if (error == 12 || error == 13) {
-                log("language unavailable for the recogniser - check the language setting")
-            }
-            // 6/7（no match / speech timeout）是正常的「静默」结果；5 是客户端状态没准备好。
-            // 都退避重开，连续失败就拉长间隔，避免把识别器打成 error=5 风暴。
-            // 6/7（没听到 / 静默超时）：识别器已经自己结束了，VAD 会在下次开口时重开它。
-            // 这里不再定时重开 —— 那正是「空窗里说话被吃掉」的来源。
-            if (error == 6 || error == 7) {
-                errorStreak = 0
-                // 以前这里直接 return，等 VAD 下一次开口才重开 —— 于是就出现了
-                // 「第一个字总是丢」：识别器在你开口之后才启动。
-                // 现在：只要还在通话模式且没被暂停，就自己重开，让麦克风一直是热的。
-                if (active && !paused) schedule(POST_ERROR_RESTART_MS)
-                return
-            }
-            // error 5 = ERROR_CLIENT：上一次 startListening 还没收尾就又开了一次。
-            // 这时立刻重开只会继续失败，先把识别器停干净再退避重试。
-            if (error == 5) {
-                runCatching { recognizer?.cancel() }
-                errorStreak = (errorStreak + 1).coerceAtMost(4)
-                schedule(400L * errorStreak)
-                return
-            }
-            errorStreak = (errorStreak + 1).coerceAtMost(5)
-            schedule((300L * errorStreak * errorStreak).coerceAtMost(3000L))
-        }
-
-        override fun onResults(results: Bundle?) {
-            listening = false
-            // 注意：这里只能设 tick 冷却，绝不能动 ignoreUntilMs ——
-            // 下面就有「在静音窗口内就丢弃转写」的判断，用同一个字段会把刚识别出来的
-            // 这句话自己丢掉（实测：每次都 drop，表现为完全听不见）。
-            tickCooldownUntil = System.currentTimeMillis() + 900
-            errorStreak = 0
-            val text = results
-                ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                ?.firstOrNull()
-                ?.trim()
-                .orEmpty()
-            log("results=" + text.length + " chars: " + text.take(60))
-            if (!active) return
-            if (System.currentTimeMillis() < ignoreUntilMs) {
-                log("dropped transcript inside the post-speech grace window")
-                return
-            }
-            if (text.length < 2) return
-            // 回声：麦克风会把自己刚念的内容听回来。只比开头 8 个字不够 ——
-            // 实测把「That's the first time the loop has behaved…」整句收了进来。
-            // 改成词集合重合度：超过一半的词一样，就当回声丢掉。
-            if (lastSpokenPrefix.isNotEmpty() && looksLikeEcho(text, lastSpokenPrefix)) {
-                log("dropped echo-like transcript: " + text.take(60))
-                return
-            }
-            if (text == lastUtterance) return
-            lastUtterance = text
-            // 先把音频存档（连同这次识别结果），万一听错了还能回头重听。
-            // 注意：这里**不**自动重听。「削头就用 Qwen 补一遍」那条自动路径已经移除 ——
-            // 背景音乐会让能量检测误判，每次都多花一次 Qwen 调用。要重听就手动来。
-            runCatching { recorder.saveUtterance(text) }
-            // 不再在这里 pause()：以前一收到转写就停麦克风，于是「说完一句、我还在想」的那几秒
-            // 里说的话全部丢失（实测丢了 "at eight PM to go for a run"）。
-            // 现在只有真的开始播报时才静音 —— 由 VoiceOutbox 触发。
-            main.removeCallbacks(watchdog)
-            main.postDelayed(watchdog, WATCHDOG_MS)
-            onUtterance(text)
-        }
-    }
-
-    /**
-     * 用户可调参数放在 filesDir/voice_tuning.txt，形如：
-     *   barge_in=off
-     *   ticks=40
-     *   energy_on=1200
-     * 每次打开通话模式重读一次 —— 改行为不用重新编译。
-     */
-    private fun applyTuning() {
-        val f = java.io.File(context.filesDir, "voice_tuning.txt")
-        if (!f.isFile) return
-        runCatching {
-            f.readText().lineSequence().forEach { line ->
-                val parts = line.split("=", limit = 2)
-                if (parts.size != 2) return@forEach
-                val key = parts[0].trim()
-                val value = parts[1].trim()
-                when (key) {
-                    "barge_in" -> bargeIn = value.equals("on", true)
-                    "ticks" -> value.toIntOrNull()?.let { bargeInTicks = it.coerceIn(2, 200) }
-                }
-            }
-            log("tuning: bargeIn=" + bargeIn + " ticks=" + bargeInTicks)
-        }
-    }
+    // 兼容旧接口：这些在简化后不再需要，但保持不变以免调用点大改
+    var bargeIn = false
+    var onBargeIn: (() -> Boolean)? = null
 
     fun start() {
         if (active) return
-        applyTuning()
         active = true
         paused = false
-        lastUtterance = ""
-        restoreCues()
-        // 上一次若是异常退出，音量可能还停在 0：进来先把状态清干净
-        main.post {
-            if (recognizer == null) {
-                recognizer = SpeechRecognizer.createSpeechRecognizer(context).also {
-                    it.setRecognitionListener(listener)
-                }
+        lastText = ""
+        recorder.onVoiceActivity = { speaking ->
+            if (!active) return@onVoiceActivity
+            if (speaking) {
+                if (paused) return@onVoiceActivity
+                recorder.markSpeechStart()
+                log("speech start")
+            } else {
+                // 播报期间录到的都在喇叭里，不该被当成用户说话
+                if (paused) return@onVoiceActivity
+                recorder.markSpeechEnd()
+                log("speech end")
+                finishUtterance()
             }
-            // 复用的识别器上一轮可能停在 error 状态，cancel() 一次把状态清干净再开
-            runCatching { recognizer?.cancel() }
-            log("start")
-            // 自己听：只有检测到有人说话才开识别器。空闲时它完全关着 ——
-            // 没有超时、没有空窗、也没有那串空闲提示音。
-            recorder.onVoiceActivity = { speaking ->
-                main.post {
-                    if (!active) return@post
-                    if (paused) return@post
-                    if (speaking) {
-                        if (!listening) log("vad: speech onset -> open recogniser")
-                        startListening()
-                    } else {
-                        log("vad: speech end")
-                    }
-                }
-            }
-            recorder.start()
-            // 通话模式一打开就在听，别等第一次 VAD 上升沿（第一次说话同样会被削头）
-            startListening()
-            shutDown = false
-            main.removeCallbacks(tick)
-            main.postDelayed(tick, TICK_MS)
         }
+        recorder.start()
+        log("start")
     }
 
     fun stop() {
         active = false
-        paused = false
-        listening = false
-        restoreCues()
-        main.removeCallbacks(restart)
-        main.removeCallbacks(watchdog)
-        main.post {
-            // 只 cancel，不 destroy：下一次打开通话模式时识别器是热的。
-            // destroy 掉的话，重新 createSpeechRecognizer + 连服务要 0.5-1 秒，
-            // 用户在这个窗口里说的话全部听不到（实测丢了整句 "Okay, I'm back"）。
-            runCatching { recognizer?.cancel() }
-            shutDown = true
-            main.removeCallbacks(tick)
-            recorder.onVoiceActivity = null
-            recorder.stop()
-            log("stop")
-        }
+        recorder.onVoiceActivity = null
+        recorder.stop()
+        log("stop")
     }
 
     fun pause() {
         if (!active || paused) return
         paused = true
-        listening = false
-        restoreCues()
-        main.removeCallbacks(restart)
-        main.post { runCatching { recognizer?.cancel() } }
         log("pause")
     }
 
     fun resume() {
         if (!active) return
         paused = false
-        // 注意：不要动 listening。resume 只表示「可以继续听了」，并不代表
-        // 当前没有识别器在跑。把它抹成 false 会让 tick 再开一个识别器，
-        // 第二个立刻返回 error=5（客户端状态错误），识别器就此坏掉。
-
-        // 静音窗口：TTS 尾音还在空气里时，VAD 可能把余音当成人声
-        ignoreUntilMs = System.currentTimeMillis() + GRACE_MS
-        main.removeCallbacks(watchdog)
-        main.removeCallbacks(restart)
-        // 主动开麦：agent 说完最后一个字的同时识别器就已经在听，
-        // 用户接着说话时第一个字不会落在「还没开始听」的空窗里。
-        // 代价是空闲时识别器会每 5 秒超时一次再自己重开，音量键提示音已静音。
-        main.post { startListening() }
         log("resume")
     }
 
-    /** 立刻开麦（打断之后用），不等下一次 VAD 上升沿。 */
-    fun listenNow() {
-        if (!active) return
-        paused = false
-        listening = false
-        ignoreUntilMs = 0L
-        main.post { startListening() }
-    }
+    /** 打断之后立刻继续听（简化版没有 barge-in，这里保留接口）。 */
+    fun listenNow() = resume()
 
-    /** 播报开始/结束时告诉控制器，打断逻辑靠它判断。 */
-    fun setSpeaking(speaking: Boolean) {
-        speakingNow = speaking
-        // 每次开始播报都从零开始数
-        if (speaking) spikeTicks = 0
-    }
+    fun setSpeaking(speaking: Boolean) = Unit
 
-    /** 让回声过滤器知道 agent 刚说过什么。 */
-    fun noteSpoken(text: String) {
-        lastSpokenPrefix = text.trim()
-    }
+    fun noteSpoken(text: String) = Unit
 
-    fun release() {
-        stop()
-        recorder.release()
-    }
+    fun release() = stop()
 
-    /** 判断一段转写是不是把我们自己刚念的话听回来了。 */
-    private fun looksLikeEcho(heard: String, spoken: String): Boolean {
-        fun words(s: String) = s.lowercase()
-            .replace(Regex("[^a-z0-9 ]"), " ")
-            .split(" ")
-            .filter { it.length > 2 }
-            .toSet()
-
-        val h = words(heard)
-        val s = words(spoken)
-        if (h.isEmpty() || s.isEmpty()) return false
-        val overlap = h.count { s.contains(it) }.toFloat() / h.size
-        return overlap >= 0.5f
-    }
-
-    private fun schedule(delayMs: Long) {
-        main.removeCallbacks(restart)
-        main.postDelayed(restart, delayMs)
-    }
-
-    private fun startListening() {
-        if (!active || paused || listening) return
-        val r = recognizer ?: return
-        val now = System.currentTimeMillis()
-        if (now - lastStartMs < MIN_START_GAP_MS) return
-        lastStartMs = now
-        listening = true
-        muteCues()
-        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            putExtra(
-                RecognizerIntent.EXTRA_LANGUAGE_MODEL,
-                RecognizerIntent.LANGUAGE_MODEL_FREE_FORM,
-            )
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-US")
-            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
-            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
-            // 端点检测：停顿 1.8 秒才算说完。
-            // 之前是 1.2 秒，实测把一个自然停顿切成两句 —— 用户说
-            // 「so you mean …（停顿）… that you'll warm it up in the background」，
-            // 识别器只交出 "so you mean"，后面半句因为已经开始生成回答而被丢掉。
-            putExtra(
-                RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS,
-                COMPLETE_SILENCE_MS,
-            )
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS,
-                POSSIBLY_COMPLETE_SILENCE_MS)
+    /**
+     * 一句话结束：存盘 + 送 ASR。
+     * 正在转写时不重入 —— 多说的部分自然并入下一段，不会互相踩。
+     */
+    private fun finishUtterance() {
+        if (transcribing) {
+            log("busy, segment already in flight")
+            return
         }
-        runCatching { r.startListening(intent) }
-            .onFailure { log("startListening failed: " + it.message) }
-    }
-
-
-
-    private fun muteCues() {
-        val am = audio ?: return
-        for (stream in intArrayOf(AudioManager.STREAM_SYSTEM, AudioManager.STREAM_NOTIFICATION)) {
-            runCatching {
-                val current = am.getStreamVolume(stream)
-                if (current > 0 && !mutedStreams.containsKey(stream)) {
-                    mutedStreams[stream] = current
-                    am.setStreamVolume(stream, 0, 0)
-                }
+        val file = recorder.saveUtterance("") ?: return
+        transcribing = true
+        scope.launch {
+            try {
+                val text = asr.transcribe(file).getOrNull()?.trim().orEmpty()
+                runCatching { file.delete() }
+                log("asr=" + text.length + " chars: " + text.take(60))
+                if (!active || paused || text.length < 2) return@launch
+                if (text == lastText) return@launch
+                lastText = text
+                main.post { onUtterance(text) }
+            } finally {
+                transcribing = false
             }
         }
     }
 
-    private fun restoreCues() {
-        val am = audio ?: return
-        mutedStreams.forEach { (stream, volume) -> runCatching { am.setStreamVolume(stream, volume, 0) } }
-        mutedStreams.clear()
-    }
-
     private fun log(msg: String) {
         runCatching {
-            File(context.filesDir, "call_mode.log")
-                .appendText(System.currentTimeMillis().toString() + "  " + msg + "\n")
+            val f = File(context.filesDir, "call_mode.log")
+            if (f.length() > 400_000) f.writeText("")
+            f.appendText(System.currentTimeMillis().toString() + "  " + msg + "\n")
         }
-    }
-
-    private companion object {
-        const val POST_ERROR_RESTART_MS = 350L
-        const val RESUME_DELAY_MS = 900L
-        /** 看门狗间隔。 */
-        const val TICK_MS = 250L
-        const val MIN_START_GAP_MS = 600L
-        /** 打断需要连续多少拍强信号：12 × 250ms ≈ 3 秒。 */
-        const val BARGE_IN_TICKS = 12
-        /** 提示音：ACK，12% 音量，60ms。 */
-        const val CUE_VOLUME = 12
-        const val CUE_MS = 60
-        const val GRACE_MS = 700L
-        const val WATCHDOG_MS = 25_000L
-        const val COMPLETE_SILENCE_MS = 1_800L
-        const val POSSIBLY_COMPLETE_SILENCE_MS = 1_000L
     }
 }
