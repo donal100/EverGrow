@@ -35,7 +35,9 @@ import java.util.concurrent.TimeUnit
  */
 class RealtimeTranslator(
     private val ctx: Context,
-    private val targetLanguage: String,
+    private val instructions: String,
+    /** 外放时为 true：模型说话期间不再上传麦克风，否则它会听见自己并自问自答。 */
+    private val halfDuplex: Boolean,
     private val onTranscript: (String) -> Unit,
     private val onState: (String) -> Unit,
 ) {
@@ -47,6 +49,8 @@ class RealtimeTranslator(
 
     @Volatile private var socket: WebSocket? = null
     @Volatile private var running = false
+    /** 服务器正在返回译文：外放模式下这期间不送麦克风音频。 */
+    @Volatile private var speaking = false
     private var record: AudioRecord? = null
     private var micThread: Thread? = null
     private var track: AudioTrack? = null
@@ -76,7 +80,7 @@ class RealtimeTranslator(
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 val session = JSONObject()
                     .put("modalities", JSONArray().put("text").put("audio"))
-                    .put("instructions", "You are a real-time interpreter. Whatever you hear, translate it into $targetLanguage and speak only the translation, briefly and naturally.")
+                    .put("instructions", instructions)
                     .put("voice", VOICE)
                     .put("input_audio_format", "pcm16")
                     .put("output_audio_format", "pcm16")
@@ -103,6 +107,7 @@ class RealtimeTranslator(
     private fun handleEvent(text: String) {
         val ev = JSONObject(text)
         when (ev.optString("type")) {
+            "response.created" -> speaking = true
             "response.audio.delta" -> {
                 val b64 = ev.optString("delta")
                 if (b64.isNotEmpty()) playback.put(Base64.decode(b64, Base64.DEFAULT))
@@ -111,6 +116,7 @@ class RealtimeTranslator(
                 transcript.append(ev.optString("delta"))
             }
             "response.audio_transcript.done", "response.done" -> {
+                speaking = false
                 if (transcript.isNotEmpty()) {
                     onTranscript(transcript.toString())
                     transcript.setLength(0)
@@ -137,6 +143,7 @@ class RealtimeTranslator(
             while (running) {
                 val n = runCatching { rec.read(buf, 0, buf.size) }.getOrDefault(-1)
                 if (n <= 0) continue
+                if (halfDuplex && speaking) continue
                 val bytes = ByteArray(n * 2)
                 var p = 0
                 for (i in 0 until n) {

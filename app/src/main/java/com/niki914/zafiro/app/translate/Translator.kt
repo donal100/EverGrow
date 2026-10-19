@@ -84,18 +84,29 @@ object Translator {
      * 实时引擎：一条 WebSocket，边听边译边说，延迟 ≈1.2s 起。
      * 目标语言锁定（en / zh），输出走耳机。
      */
-    fun startRealtime(ctx: Context, target: String) {
+    fun startRealtime(ctx: Context, mode: String) {
         if (realtime != null) return
         val app = ctx.applicationContext
         appCtx = app
-        direction = if (target == "zh") "to-chinese" else "to-english"
-        routing = AudioRouter.routeToEarphones(app)
+        direction = mode
+        // 双向走外放（两个人都要听见），单向走耳机
+        val twoWay = mode == "two-way"
+        routing = if (twoWay) "speaker" else AudioRouter.routeToEarphones(app)
+        val instructions = when (mode) {
+            "to-chinese" ->
+                "You are a real-time interpreter. Whatever you hear, translate it into Simplified Chinese and speak only the translation, briefly and naturally."
+            "two-way" ->
+                "You are a two-way interpreter between two people. If you hear Chinese, translate it into English. If you hear English, translate it into Simplified Chinese. Speak only the translation, briefly and naturally."
+            else ->
+                "You are a real-time interpreter. Whatever you hear, translate it into English and speak only the translation, briefly and naturally."
+        }
         state = "connecting"
         realtime = RealtimeTranslator(
             app,
-            if (target == "zh") "Simplified Chinese" else "English",
-            { text -> lastTranslated = text },
-            { s -> state = s },
+            instructions,
+            halfDuplex = twoWay,
+            onTranscript = { text -> lastTranslated = text },
+            onState = { s -> state = s },
         ).also { it.start() }
     }
 
