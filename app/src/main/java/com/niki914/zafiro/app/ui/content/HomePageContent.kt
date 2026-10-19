@@ -235,6 +235,9 @@ private var savedThinkingLevel: String? = null
 @Volatile private var streamingJob: kotlinx.coroutines.Job? = null
 @Volatile private var speechCancelled = false
 
+/** 上一次完整念完的正文。防止「回头找上一条有正文的消息」时把旧回答再念一遍。 */
+@Volatile private var lastFullySpoken: String = ""
+
 /**
  * 缩写词：句点后面不是句子结束。不做这一步的话 "e.g." 与 "Dr." 会把一句话劈成两半，
  * 合成出来就是断在词中间的两段音频。
@@ -484,17 +487,27 @@ fun HomePageContent(
         if (streamingJob?.isActive == true) return@LaunchedEffect
         speechCancelled = false
 
-        fun liveText(): String = latestUiState.turns.lastOrNull()
-            ?.blocks
-            ?.filterIsInstance<HomeChatBlock.Text>()
-            ?.joinToString("\n") { it.text }
-            ?.trim()
-            .orEmpty()
+        fun liveText(): String {
+            // 从后往前找第一条「有正文」的消息：最后一条很可能还是刚追加的空提问，
+            // 死盯最后一条就会得到空串 —— 表现就是「一个字都没念」。
+            for (turn in latestUiState.turns.asReversed()) {
+                val text = turn.blocks
+                    .filterIsInstance<HomeChatBlock.Text>()
+                    .joinToString("\n") { it.text }
+                    .trim()
+                if (text.isNotEmpty()) return text
+            }
+            return ""
+        }
 
         streamingJob = voiceScope.launch {
             callModeController.pause()
             callModeController.setSpeaking(true)
             agentSpeaking = true
+            if (liveText() == lastFullySpoken) {
+                voiceSpeaker.note("stream: text already spoken, skipping")
+                return@launch
+            }
             var spoken = 0
             var spokenPrefix = ""
             var stableFor = 0
@@ -549,6 +562,7 @@ fun HomePageContent(
                     }
                 }
                 voiceSpeaker.awaitIdle()
+                lastFullySpoken = liveText()
                 voiceSpeaker.note("stream done: spokenChars=" + spoken)
             } finally {
                 agentSpeaking = false

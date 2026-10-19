@@ -116,7 +116,9 @@ class CallModeController(
         override fun run() {
             try {
                 if (!active || shutDown) return
-                if (!paused && !listening && recorder.isLoud()) {
+                if (!paused && !listening && recorder.isLoud() &&
+                    System.currentTimeMillis() >= ignoreUntilMs
+                ) {
                     log("tick: loud -> open recogniser")
                     startListening()
                 }
@@ -171,6 +173,8 @@ class CallModeController(
 
         override fun onResults(results: Bundle?) {
             listening = false
+            // 刚出结果，识别器还在收尾：给 tick 一个冷却，别立刻抢着开新会话
+            ignoreUntilMs = System.currentTimeMillis() + 900
             errorStreak = 0
             val text = results
                 ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
