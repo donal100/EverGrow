@@ -487,34 +487,27 @@ fun HomePageContent(
         if (streamingJob?.isActive == true) return@LaunchedEffect
         speechCancelled = false
 
-        fun liveText(): String {
-            // 从后往前找第一条「有正文」的消息：最后一条很可能还是刚追加的空提问，
-            // 死盯最后一条就会得到空串 —— 表现就是「一个字都没念」。
-            for (turn in latestUiState.turns.asReversed()) {
-                val text = turn.blocks
-                    .filterIsInstance<HomeChatBlock.Text>()
-                    .joinToString("\n") { it.text }
-                    .trim()
-                if (text.isNotEmpty()) return text
-            }
-            return ""
-        }
+        // 只看最后一条消息。回溯到上一条会把「上一条回答」念出来 —— 实测量过两次。
+        // 最后一条还没正文时就等（生成中），等不到就不念，宁可沉默也不念错。
+        fun liveText(): String = latestUiState.turns.lastOrNull()
+            ?.blocks
+            ?.filterIsInstance<HomeChatBlock.Text>()
+            ?.joinToString("\n") { it.text }
+            ?.trim()
+            .orEmpty()
 
         streamingJob = voiceScope.launch {
             callModeController.pause()
             callModeController.setSpeaking(true)
             agentSpeaking = true
-            // 以「开播那一刻屏幕上已有的正文」为基线（那通常是上一条回答），
-            // 一直等到正文真的变了才开口。用 lastFullySpoken 当基线不行：
-            // 它可能是空的（刚启动/上一条没念过），于是会直接把旧回答念出来。
-            val baseline = liveText()
+            // 等最后一条消息长出正文（生成中最多等 6 秒）。等不到就什么都不念。
             var guard = 0
-            while (liveText() == baseline && guard < 50) {
+            while (liveText().isEmpty() && guard < 50) {
                 delay(120)
                 guard += 120
             }
-            if (liveText() == baseline) {
-                voiceSpeaker.note("stream: no new text yet, skipping")
+            if (liveText().isEmpty()) {
+                voiceSpeaker.note("stream: no text in the last turn, skipping")
                 return@launch
             }
             var spoken = 0
