@@ -467,6 +467,9 @@ fun HomePageContent(
     }
     // 页面销毁什么都不做：发言器和它的作用域都是进程级的。
     // （之前在这里 stop()/cancel()，每回合都丢掉排队中的句子。）
+    // 是否正在播报：药丸按钮据此决定「停止说话」还是「关闭通话模式」
+    var agentSpeaking by remember { mutableStateOf(false) }
+
     // —— 语音播报：边生成边念 ——
     // 只看「最后一条消息的正文」，不记 turn id。之前按 id 定位，用户说话一快，
     // 新一轮已经追加到末尾，我们就找不到该念的那段文本（spokenChars=0，
@@ -586,9 +589,6 @@ fun HomePageContent(
             latestViewModel.sendIntent(HomeChatIntent.Send)
         }
     }
-    // 是否正在播报：药丸按钮据此决定「停止说话」还是「关闭通话模式」
-    var agentSpeaking by remember { mutableStateOf(false) }
-
     // 打断只在戴耳机时启用：外放会让麦克风听见 agent 自己，产生自我打断。
     // 有耳机（有线/蓝牙/USB）时，用户说话就是真的在说话。
     LaunchedEffect(listenMode) {
