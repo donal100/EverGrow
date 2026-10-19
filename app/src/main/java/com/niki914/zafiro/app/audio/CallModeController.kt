@@ -201,6 +201,10 @@ class CallModeController(
             // 这里不再定时重开 —— 那正是「空窗里说话被吃掉」的来源。
             if (error == 6 || error == 7) {
                 errorStreak = 0
+                // 以前这里直接 return，等 VAD 下一次开口才重开 —— 于是就出现了
+                // 「第一个字总是丢」：识别器在你开口之后才启动。
+                // 现在：只要还在通话模式且没被暂停，就自己重开，让麦克风一直是热的。
+                if (active && !paused) schedule(POST_ERROR_RESTART_MS)
                 return
             }
             // error 5 = ERROR_CLIENT：上一次 startListening 还没收尾就又开了一次。
@@ -309,6 +313,8 @@ class CallModeController(
                 }
             }
             recorder.start()
+            // 通话模式一打开就在听，别等第一次 VAD 上升沿（第一次说话同样会被削头）
+            startListening()
             shutDown = false
             main.removeCallbacks(tick)
             main.postDelayed(tick, TICK_MS)
@@ -355,7 +361,10 @@ class CallModeController(
         ignoreUntilMs = System.currentTimeMillis() + GRACE_MS
         main.removeCallbacks(watchdog)
         main.removeCallbacks(restart)
-        // 不再主动开麦：VAD 检测到用户开口才开。这是「不轮询」的关键。
+        // 主动开麦：agent 说完最后一个字的同时识别器就已经在听，
+        // 用户接着说话时第一个字不会落在「还没开始听」的空窗里。
+        // 代价是空闲时识别器会每 5 秒超时一次再自己重开，音量键提示音已静音。
+        main.post { startListening() }
         log("resume")
     }
 
@@ -472,9 +481,9 @@ class CallModeController(
         /** 提示音：ACK，12% 音量，60ms。 */
         const val CUE_VOLUME = 12
         const val CUE_MS = 60
-        const val GRACE_MS = 1_500L
+        const val GRACE_MS = 700L
         const val WATCHDOG_MS = 25_000L
-        const val COMPLETE_SILENCE_MS = 900L
+        const val COMPLETE_SILENCE_MS = 1_200L
         const val POSSIBLY_COMPLETE_SILENCE_MS = 600L
     }
 }

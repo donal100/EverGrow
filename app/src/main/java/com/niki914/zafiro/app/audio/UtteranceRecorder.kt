@@ -140,8 +140,9 @@ class UtteranceRecorder(private val filesDir: File) {
         thread = null
     }
 
-    /** 相对噪声底的判定阈值：至少 900，且不低于底噪的 3 倍。 */
-    private fun dynamicThreshold(): Double = maxOf(ENERGY_ON.toDouble(), noiseFloor * 3.0)
+    /** 相对噪声底的判定阈值：至少 600，且不低于底噪的 2 倍。
+     *  之前是 900 / 3 倍，安静房间里开始说话的第一个字常常达不到，被整段跳过。 */
+    private fun dynamicThreshold(): Double = maxOf(ENERGY_ON.toDouble(), noiseFloor * FLOOR_MULT)
 
     /** 现在是否有人声（电平触发用）。 */
     fun isLoud(): Boolean = running && currentLevel > dynamicThreshold()
@@ -254,7 +255,9 @@ class UtteranceRecorder(private val filesDir: File) {
         const val DIR = "utt"
         const val KEEP_FILES = 8
         /** VAD 阈值（PCM16）。正常说话 2000-8000，静音 <300。 */
-        const val ENERGY_ON = 900
+        const val ENERGY_ON = 600
+        /** 噪声底倍数：2 倍即可分开人声与空调/风扇噪声 */
+        const val FLOOR_MULT = 2.0
         const val ENERGY_OFF = 450
         /** 每帧约 100ms：1 帧起说话即触发，6 帧（≈600ms）静音算说完。 */
         const val ONSET_FRAMES = 1
