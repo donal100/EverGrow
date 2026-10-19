@@ -176,7 +176,10 @@ class CallModeController(
         override fun onRmsChanged(rmsdB: Float) = Unit
         override fun onBufferReceived(buffer: ByteArray?) = Unit
         override fun onEndOfSpeech() {
-            listening = false
+            // 关键：这里不能把 listening 置 false。
+            // onEndOfSpeech 只表示「用户说完了」，识别器还在处理、结果还没回来；
+            // 一旦置 false，tick 会马上再开一个识别器，把正在处理的那半句丢掉
+            // —— 实测一句话里出现三次 "speech start"，最后只拿到 "seconds"。
             recorder.markSpeechEnd()
             log("speech end")
         }
