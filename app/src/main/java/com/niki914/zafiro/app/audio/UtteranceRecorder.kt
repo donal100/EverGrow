@@ -89,6 +89,7 @@ class UtteranceRecorder(private val filesDir: File) {
             return
         }
         record = rec
+        runCatching { preferredInput?.let { rec.setPreferredDevice(it) } }
         running = true
         runCatching { rec.startRecording() }
         thread = Thread {
@@ -199,6 +200,10 @@ class UtteranceRecorder(private val filesDir: File) {
             if (stamp < cutoff) runCatching { f.delete() }
         }
     }
+
+    /** 指定的输入设备（例如蓝牙耳机麦克风）；为 null 时用系统默认。 */
+    @Volatile
+    var preferredInput: android.media.AudioDeviceInfo? = null
 
     /** 原始样本回调：给实时转写引擎喂数据用。 */
     @Volatile

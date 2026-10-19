@@ -51,7 +51,13 @@ class ListenEngine(
         enterCallAudio()
         recorder.onSamples = { buf, n -> enqueue(buf, n) }
         recorder.onVoiceActivity = null
-        recorder.start()
+        // SCO 是异步建立的：先切模式、再挑选输入设备、最后开录音。
+        main.postDelayed({
+            if (!active) return@postDelayed
+            recorder.preferredInput = scoMic() ?: builtInMic()
+            recorder.start()
+            log("input=" + (recorder.preferredInput?.productName ?: "default"))
+        }, 600)
         startWriter()
         main.post { openSession() }
     }
@@ -72,6 +78,18 @@ class ListenEngine(
      * 所以要用耳机麦，必须把设备切进通信模式并启动 SCO —— 代价是输出也变成通话音质。
      * 有线耳机不需要这一步，系统会直接用它的麦克风。
      */
+    private fun scoMic(): android.media.AudioDeviceInfo? = runCatching {
+        val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        am.getDevices(AudioManager.GET_DEVICES_INPUTS)
+            .firstOrNull { it.type == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_SCO }
+    }.getOrNull()
+
+    private fun builtInMic(): android.media.AudioDeviceInfo? = runCatching {
+        val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        am.getDevices(AudioManager.GET_DEVICES_INPUTS)
+            .firstOrNull { it.type == android.media.AudioDeviceInfo.TYPE_BUILTIN_MIC }
+    }.getOrNull()
+
     private fun enterCallAudio() = runCatching {
         val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
         if (am.isBluetoothScoAvailableOffCall) {
