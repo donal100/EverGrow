@@ -147,6 +147,13 @@ class VoiceReplySpeaker(private val appContext: Context) {
         }
     }
 
+    /**
+     * 队列念完时回调一次（在播放线程上）。
+     * 通话模式靠它把麦克风交还回去 —— 少了这一句，说完一句就再也不听了。
+     */
+    @Volatile
+    var onIdle: (() -> Unit)? = null
+
     /** 现在真的有声音在放/要放吗？打断逻辑靠它判断，避免用陈旧状态误触发。 */
     fun isBusy(): Boolean = playing || pending.isNotEmpty() || readyAudio.isNotEmpty()
 
@@ -200,6 +207,11 @@ class VoiceReplySpeaker(private val appContext: Context) {
                 playing = false
                 audio.delete()
                 log("play: done remaining=" + readyAudio.size)
+                // 队列真的空了才通知：还有下一句在排着就别抢麦克风。
+                if (pending.isEmpty() && readyAudio.isEmpty() && !cancelled) {
+                    val hook = onIdle
+                    if (hook != null) runCatching { hook() }
+                }
             }
         }
     }

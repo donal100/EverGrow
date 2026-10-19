@@ -34,9 +34,23 @@ object VoiceOutbox {
         lastFull = ""
     }
 
+    /** 一句话念完（队列空了）时回调；通话模式用它重新开麦。 */
+    var onSpeechIdle: (() -> Unit)? = null
+
     fun attach(context: Context) {
-        if (speaker == null) speaker = VoiceReplySpeaker(context.applicationContext)
+        if (speaker == null) {
+            speaker = VoiceReplySpeaker(context.applicationContext).also { sp ->
+                sp.onIdle = {
+                    val hook = onSpeechIdle
+                    if (hook != null) {
+                        android.os.Handler(android.os.Looper.getMainLooper()).post { hook() }
+                    }
+                }
+            }
+        }
     }
+
+    fun isBusy(): Boolean = speaker?.isBusy() == true
 
     fun release() {
         speaker?.release()

@@ -512,6 +512,23 @@ fun HomePageContent(
         com.niki914.zafiro.app.audio.VoiceOutbox.beginTurn()
     }
 
+    // 回合结束 -> 把麦克风交还通话模式。
+    // 每识别完一句话控制器就 pause()，而 resume() 以前只有 25 秒的看门狗在调，
+    // 听感上就是「回答完这句它就不理我了」。这里补回那一环：
+    // 没在念 -> 直接恢复；正在念 -> 等队列念完（onSpeechIdle）再恢复。
+    LaunchedEffect(uiState.isGenerating, listenMode) {
+        val outbox = com.niki914.zafiro.app.audio.VoiceOutbox
+        if (!listenMode) {
+            outbox.onSpeechIdle = null
+            return@LaunchedEffect
+        }
+        outbox.onSpeechIdle = { callModeController.resume() }
+        if (!uiState.isGenerating) {
+            kotlinx.coroutines.delay(400)
+            if (!outbox.isBusy()) callModeController.resume()
+        }
+    }
+
     // 打断只在戴耳机时启用：外放会让麦克风听见 agent 自己，产生自我打断。
     // 有耳机（有线/蓝牙/USB）时，用户说话就是真的在说话。
     LaunchedEffect(listenMode) {
