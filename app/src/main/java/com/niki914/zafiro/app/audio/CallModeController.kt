@@ -32,7 +32,7 @@ class CallModeController(
         // 外放时麦克风必然听见喇叭，任何判断都会在「真打断」和「听见自己」之间摇摆
         // —— 这是行业里通行的取舍：Deepgram 等给出的生产建议就是外放走半双工、
         // 打断留给耳机。有线/蓝牙耳机都算。
-        val headphones = hasHeadphones()
+        headphones = hasHeadphones()
         log("barge-in=" + (if (headphones) "on" else "off") + " (headphones=" + headphones + ")")
         ListenBus.onSpeechStart = if (!headphones) null else { heard ->
             if (VoiceOutbox.isBusy() && heard.length >= 4 && !echoLikely(heard)) {
@@ -48,6 +48,20 @@ class CallModeController(
         ListenBus.onSentence = null
         ListenBus.onSpeechStart = null
         runCatching { context.stopService(Intent(context, ListenService::class.java)) }
+    }
+
+    private var headphones = false
+
+    /** 播报开始：外放时把麦克风静音，耳机时保持收听（用于打断）。 */
+    fun micOff() {
+        if (headphones) return
+        ListenBus.setMuted(true)
+        log("mic muted (speaking, no headphones)")
+    }
+
+    /** 播报结束：恢复。 */
+    fun micOn() {
+        ListenBus.setMuted(false)
     }
 
     fun pause() = Unit

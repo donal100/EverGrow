@@ -43,6 +43,9 @@ class ListenEngine(
      */
     @Volatile var onSpeechStart: ((String) -> Unit)? = null
 
+    /** 播报期间静音：不把样本送进识别器（外放时这是最干净的做法）。 */
+    @Volatile var muted = false
+
     @Volatile private var active = false
     @Volatile private var out: FileOutputStream? = null
     private var recognizer: SpeechRecognizer? = null
@@ -81,7 +84,7 @@ class ListenEngine(
      * 有线耳机不需要这一步，系统会直接用它的麦克风。
      */
     private fun enqueue(buf: ShortArray, n: Int) {
-        if (!active) return
+        if (!active || muted) return
         val bytes = ByteArray(n * 2)
         var p = 0
         for (i in 0 until n) {

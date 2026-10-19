@@ -75,5 +75,7 @@ class ListenService : Service() {
 /** 服务里的转写结果送出去的唯一出口。 */
 object ListenBus {
     @Volatile var onSentence: ((String) -> Unit)? = null
+    /** 播报开始/结束时静音或恢复麦克风（外放时的半双工）。 */
+    fun setMuted(muted: Boolean) { engine?.muted = muted }
     @Volatile var onSpeechStart: ((String) -> Unit)? = null
 }

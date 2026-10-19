@@ -524,10 +524,10 @@ fun HomePageContent(
             wasGenerating = uiState.isGenerating
             return@LaunchedEffect
         }
-        outbox.onSpeechIdle = { callModeController.resume() }
+        outbox.onSpeechIdle = { callModeController.micOn(); callModeController.resume() }
         // 只有「真的开始念」才静音：生成思考的那几秒仍然在听，
         // 于是用户接着说的下一句（比如「顺便八点提醒我跑步」）不会掉进空窗。
-        outbox.onSpeechStart = { }
+        outbox.onSpeechStart = { callModeController.micOff() }
         // 麦克风一直在听：把即将念出的文字交给控制器，用来丢掉「听见自己」的转写
         outbox.onSpoken = { spoken -> callModeController.noteSpoken(spoken) }
         // 只在「真的从生成中走到结束」时才恢复收音。
