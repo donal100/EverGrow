@@ -21,6 +21,8 @@
          是高风险信号，而这里并不需要它。文件写入同理，改用 MediaStore，
          于是 MANAGE_EXTERNAL_STORAGE（全盘访问）也一起去掉了。 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <!-- 听写要在锁屏后继续：前台服务 + microphone 类型 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- 自己的日历：精确闹钟（12+ 可被用户拒绝，代码里退化成不精确）+ 开机后重排 -->
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
@@ -186,6 +188,11 @@
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
+
+        <service
+            android:name=".audio.ListenService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
 
 </application>
 </manifest>
