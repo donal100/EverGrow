@@ -46,6 +46,14 @@ class UtteranceRecorder(private val filesDir: File) {
     var currentLevel = 0
         private set
 
+    /**
+     * 自适应噪声底：房间里的音乐/风扇/街道声会把这个值顶起来。
+     * 判定「有人说话」要求明显高于这个底（3 倍），所以音乐再响也不会被当成人声 ——
+     * 固定阈值做不到这一点：要么被音乐触发，要么在安静处又听不见。
+     */
+    @Volatile
+    private var noiseFloor = 300.0
+
     private var speakingDetected = false
     private var aboveCount = 0
     private var belowCount = 0
@@ -94,7 +102,11 @@ class UtteranceRecorder(private val filesDir: File) {
                     if (v > peak) peak = v
                 }
                 currentLevel = peak
-                if (peak > ENERGY_ON) {
+                // 只有在「判断为没人说话」时才更新噪声底，避免把人声也学进去
+                if (!speakingDetected) {
+                    noiseFloor = noiseFloor * 0.98 + peak * 0.02
+                }
+                if (peak > dynamicThreshold()) {
                     aboveCount++
                     belowCount = 0
                 } else if (peak < ENERGY_OFF) {
@@ -128,8 +140,14 @@ class UtteranceRecorder(private val filesDir: File) {
         thread = null
     }
 
+    /** 相对噪声底的判定阈值：至少 900，且不低于底噪的 3 倍。 */
+    private fun dynamicThreshold(): Double = maxOf(ENERGY_ON.toDouble(), noiseFloor * 3.0)
+
     /** 现在是否有人声（电平触发用）。 */
-    fun isLoud(): Boolean = running && currentLevel > ENERGY_ON
+    fun isLoud(): Boolean = running && currentLevel > dynamicThreshold()
+
+    /** 当前噪声底，诊断用。 */
+    fun floor(): Int = noiseFloor.toInt()
 
     fun markSpeechStart() {
         speechStart = totalWritten

@@ -112,14 +112,31 @@ class CallModeController(
      * 电平触发的看门狗：每 250ms 看一眼「现在有没有人说话」，有就开麦。
      * 不依赖 VAD 的上升沿 —— 那东西一旦卡住（房间一直不够安静），就再也不会触发。
      */
+    private var loudTicks = 0
+
+    /**
+     * 电平看门狗。要求连续两拍（约 500ms）都在阈值之上才算「有人在说话」：
+     * 一次关门声、一下碰麦克风不会触发；音乐也不会，因为自适应噪声底会把阈值顶高。
+     */
     private val tick = object : Runnable {
         override fun run() {
             try {
                 if (!active || shutDown) return
-                if (!paused && !listening && recorder.isLoud() &&
+                loudTicks = if (recorder.isLoud()) loudTicks + 1 else 0
+
+                // 打断：真正在放声音时，用户连说两拍才掐掉播放
+                if (speakingNow && bargeIn && loudTicks >= 2) {
+                    val handled = onBargeIn?.invoke() ?: false
+                    if (handled) {
+                        log("tick: barge in (floor=" + recorder.floor() + ")")
+                        loudTicks = 0
+                    }
+                }
+                // 正常收音
+                if (!paused && !listening && loudTicks >= 1 &&
                     System.currentTimeMillis() >= ignoreUntilMs
                 ) {
-                    log("tick: loud -> open recogniser")
+                    log("tick: loud -> open recogniser (floor=" + recorder.floor() + ")")
                     startListening()
                 }
             } catch (_: Throwable) {
@@ -227,13 +244,6 @@ class CallModeController(
             recorder.onVoiceActivity = { speaking ->
                 main.post {
                     if (!active) return@post
-                    if (speakingNow && bargeIn && speaking) {
-                        val handled = onBargeIn?.invoke() ?: false
-                        if (handled) {
-                            log("vad: user spoke while we were talking -> barge in")
-                            return@post
-                        }
-                    }
                     if (paused) return@post
                     if (speaking) {
                         if (!listening) log("vad: speech onset -> open recogniser")
