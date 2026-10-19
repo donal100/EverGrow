@@ -213,6 +213,9 @@ private var sharedSpeaker: com.niki914.zafiro.app.audio.VoiceReplySpeaker? = nul
 private fun speakerFor(context: android.content.Context) = sharedSpeaker
     ?: com.niki914.zafiro.app.audio.VoiceReplySpeaker(context).also { sharedSpeaker = it }
 
+/** 送合成的最小字符数：太小就会出现句间空隙（合成比播放慢）。 */
+private const val MIN_SPEECH_CHUNK = 140
+
 /** 通话模式期间使用的思考强度：语音对话要的是「马上开口」，不是深思熟虑。 */
 private const val VOICE_THINKING_LEVEL = "minimal"
 
@@ -505,7 +508,10 @@ fun HomePageContent(
                     val snapshot = latestUiState
                     val text = turnText()
                     val cut = sentenceEnd(text, spoken)
-                    if (cut > spoken) {
+                    // 短句不要单独成块：一句 "Three things in it:" 播放不到 1 秒，
+                    // 而下一次合成要 1 秒出头 —— 块太小就必然露出空隙。
+                    // 攒到约 140 字符再送合成；生成结束时（不回 true）才放宽。
+                    if (cut > spoken && (!snapshot.isGenerating || cut - spoken >= MIN_SPEECH_CHUNK)) {
                         val chunk = text.substring(spoken, cut).trim()
                         spoken = cut
                         stableFor = 0

@@ -56,6 +56,8 @@ class VoiceReplySpeaker(private val appContext: Context) {
      * 这里让下一句在当前句还响着的时候就开始合成，接缝就没了。
      */
     private val pending = LinkedBlockingQueue<String>()
+    /** 合成好的音频排队等播放：合成线程和播放线程各跑各的，句与句之间自然接上。 */
+    private val readyAudio = LinkedBlockingQueue<File>()
     private val workerScope = CoroutineScope(
         SupervisorJob() + Dispatchers.IO + CoroutineExceptionHandler { _, err ->
             // 音频线程出什么事都不该带走整个应用：记一行，继续服务下一条
@@ -128,61 +130,49 @@ class VoiceReplySpeaker(private val appContext: Context) {
         pending.offer(clean)
         if (workerStarted.compareAndSet(false, true)) {
             pruneCache()
-            workerScope.launch { workerLoop() }
+            workerScope.launch { synthLoop() }
+            workerScope.launch { playLoop() }
         }
     }
 
     /** 等队列念完（调用方据此决定何时把麦克风交还通话模式）。 */
     suspend fun awaitIdle() {
-        while (playing || pending.isNotEmpty()) delay(60)
+        while (playing || pending.isNotEmpty() || readyAudio.isNotEmpty()) delay(60)
     }
 
-    private suspend fun workerLoop() {
-        var ready: File? = null
+    /**
+     * 两条独立流水线：合成线程只负责「文本 -> wav」，播放线程只负责「wav -> 声音」。
+     * 这样第 N+1 句在当前句还在响的时候就已经合成好了，接缝自然消失 ——
+     * 而且两边互不等待，不会出现之前那种「预取的音频没人播」。
+     */
+    private suspend fun synthLoop() {
         while (workerScope.isActive) {
-            // 上一轮已经预取好的那句必须先放掉。少了这一步，预取的音频就永远躺在
-            // next 里没人播 —— 表现是「只念了第一句就停下」。
-            val prepared = ready
-            if (prepared != null) {
-                ready = null
-                log("worker: playing prefetched " + prepared.name)
-                playing = true
-                try {
-                    runCatching { playBlocking(prepared) }
-                } finally {
-                    playing = false
-                    prepared.delete()
-                }
+            val text = withContext(Dispatchers.IO) { pending.poll(1, TimeUnit.SECONDS) } ?: continue
+            if (cancelled) continue
+            val audio = synthesizeToFile(text) ?: continue
+            log("synth: ready chars=" + text.length + " head=" + text.take(32) + " pending=" + pending.size)
+            if (cancelled) {
+                audio.delete()
                 continue
             }
-            val text = withContext(Dispatchers.IO) { pending.poll(1, TimeUnit.SECONDS) }
-            if (text == null) continue
+            readyAudio.put(audio)
+        }
+    }
+
+    private suspend fun playLoop() {
+        while (workerScope.isActive) {
+            val audio = withContext(Dispatchers.IO) { readyAudio.poll(1, TimeUnit.SECONDS) } ?: continue
             if (cancelled) {
-                pending.clear()
+                audio.delete()
                 continue
             }
-            val audio = synthesizeToFile(text)
-            // 关键：播放之前先把下一句的合成推起来，接缝才不会露出来
-            val prefetch = workerScope.async {
-                val nextText = withContext(Dispatchers.IO) { pending.poll(15, TimeUnit.SECONDS) }
-                if (nextText == null || cancelled) null else synthesizeToFile(nextText)
-            }
-            log("worker: synthesised chars=" + text.length + " head=" + text.take(40) + " file=" + (audio != null))
-            if (audio != null) {
-                playing = true
-                try {
-                    runCatching { playBlocking(audio) }
-                } finally {
-                    playing = false
-                    audio.delete()
-                    log("worker: played chars=" + text.length)
-                }
-            }
-            ready = prefetch.await()
-            if (cancelled) {
-                pending.clear()
-                ready?.delete()
-                ready = null
+            playing = true
+            try {
+                runCatching { playBlocking(audio) }
+            } finally {
+                playing = false
+                audio.delete()
+                log("play: done remaining=" + readyAudio.size)
             }
         }
     }
@@ -334,6 +324,10 @@ class VoiceReplySpeaker(private val appContext: Context) {
         cancelled = true
         playing = false
         pending.clear()
+        while (true) {
+            val f = readyAudio.poll() ?: break
+            runCatching { f.delete() }
+        }
         runCatching { player?.stop() }
         runCatching { player?.release() }
         player = null
