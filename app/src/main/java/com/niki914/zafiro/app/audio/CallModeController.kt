@@ -297,6 +297,8 @@ class CallModeController(
                     it.setRecognitionListener(listener)
                 }
             }
+            // 复用的识别器上一轮可能停在 error 状态，cancel() 一次把状态清干净再开
+            runCatching { recognizer?.cancel() }
             log("start")
             // 自己听：只有检测到有人说话才开识别器。空闲时它完全关着 ——
             // 没有超时、没有空窗、也没有那串空闲提示音。
@@ -329,9 +331,10 @@ class CallModeController(
         main.removeCallbacks(restart)
         main.removeCallbacks(watchdog)
         main.post {
+            // 只 cancel，不 destroy：下一次打开通话模式时识别器是热的。
+            // destroy 掉的话，重新 createSpeechRecognizer + 连服务要 0.5-1 秒，
+            // 用户在这个窗口里说的话全部听不到（实测丢了整句 "Okay, I'm back"）。
             runCatching { recognizer?.cancel() }
-            runCatching { recognizer?.destroy() }
-            recognizer = null
             shutDown = true
             main.removeCallbacks(tick)
             recorder.onVoiceActivity = null
