@@ -325,7 +325,9 @@ class VoiceReplySpeaker(private val appContext: Context) {
         if (text.any { it.code in 0x3400..0x4DBF || it.code in 0x4E00..0x9FFF }) "Chinese" else "English"
 
     private suspend fun playBlocking(file: File) {
-        stop()
+        // 注意：这里只能停播放器。之前调的是 stop()，而 stop() 会把 cancelled 置真 ——
+        // 于是「第一句开始播」就等于「取消后面所有句子的合成」，永远只念第一句。
+        stopPlayer()
         val mp = MediaPlayer()
         player = mp
         try {
@@ -345,6 +347,14 @@ class VoiceReplySpeaker(private val appContext: Context) {
         }
     }
 
+    /** 只停当前播放（不动队列、不动取消标记）。 */
+    private fun stopPlayer() {
+        runCatching { player?.stop() }
+        runCatching { player?.release() }
+        player = null
+        fallback.stop()
+    }
+
     fun stop() {
         cancelled = true
         playing = false
@@ -353,10 +363,7 @@ class VoiceReplySpeaker(private val appContext: Context) {
             val f = readyAudio.poll() ?: break
             runCatching { f.delete() }
         }
-        runCatching { player?.stop() }
-        runCatching { player?.release() }
-        player = null
-        fallback.stop()
+        stopPlayer()
     }
 
     fun release() {
