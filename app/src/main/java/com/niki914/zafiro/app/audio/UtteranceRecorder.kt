@@ -32,13 +32,6 @@ class UtteranceRecorder(private val filesDir: File) {
     private var speechStart = -1L
     private var speechEnd = -1L
 
-    /**
-     * 我们自己听到的第一个有声音的采样点。用来回答一个问题：这次识别是不是漏掉了开头？
-     * 识别器重开有 0.3 秒左右的死区，用户在那段时间开口，Google 的
-     * onBeginningOfSpeech 会晚于真正的声音起点 —— 这段差值就是被吃掉的词。
-     */
-    private var energyStart = -1L
-    private var quiet = true
 
     private var record: AudioRecord? = null
     private var thread: Thread? = null
@@ -77,17 +70,6 @@ class UtteranceRecorder(private val filesDir: File) {
             while (running) {
                 val n = runCatching { rec.read(buf, 0, buf.size) }.getOrDefault(-1)
                 if (n <= 0) continue
-                var peak = 0
-                for (i in 0 until n) {
-                    val v = kotlin.math.abs(buf[i].toInt())
-                    if (v > peak) peak = v
-                }
-                if (quiet && peak > ENERGY_ON) {
-                    quiet = false
-                    if (energyStart < 0) energyStart = totalWritten
-                } else if (!quiet && peak < ENERGY_OFF) {
-                    quiet = true
-                }
                 synchronized(lock) {
                     for (i in 0 until n) {
                         ring[writeIndex] = buf[i]
@@ -112,19 +94,6 @@ class UtteranceRecorder(private val filesDir: File) {
         speechStart = totalWritten
     }
 
-    /**
-     * 这次识别是否漏掉了开头：我们的能量起点明显早于识别器报告的语音起点。
-     * 阈值取 250ms —— 小于它的差值属于正常的起始抖动。
-     */
-    fun wasClipped(): Boolean {
-        val energy = energyStart
-        val google = speechStart
-        if (energy < 0 || google < 0) return false
-        return google - energy > sampleRate / 4
-    }
-
-    /** 我们听到声音的起点（采样计数），供调用方决定要不要重听整段。 */
-    fun energyOnset(): Long = energyStart
 
     fun markSpeechEnd() {
         speechEnd = totalWritten
@@ -140,14 +109,10 @@ class UtteranceRecorder(private val filesDir: File) {
     fun saveUtterance(recognisedText: String): File? {
         val googleStart = speechStart
         val end = speechEnd
-        val energy = energyStart
         speechStart = -1L
         speechEnd = -1L
-        energyStart = -1L
-        quiet = true
         if (googleStart < 0 || end <= googleStart) return null
-        // 被削头就以能量的起点为准
-        val start = if (energy in 1 until googleStart) energy else googleStart
+        val start = googleStart
         val samples = end - start
         if (samples < sampleRate / 4 || samples > sampleRate * ringSeconds) return null
 
@@ -226,9 +191,6 @@ class UtteranceRecorder(private val filesDir: File) {
     private companion object {
         const val DIR = "utt"
         const val KEEP_FILES = 8
-        /** 能量阈值（PCM16）：正常说话大约 2000-8000，静音 <300。 */
-        const val ENERGY_ON = 900
-        const val ENERGY_OFF = 450
         const val MAX_AGE_MS = 20 * 60 * 1000L
     }
 }

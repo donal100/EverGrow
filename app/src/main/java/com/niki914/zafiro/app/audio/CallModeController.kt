@@ -65,12 +65,6 @@ class CallModeController(
      */
     private val audio = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
 
-    /** 削头修复用的重听：把整段音频交给 Qwen，拿更完整的转写。 */
-    private val asr by lazy { QwenAsrClient(QwenAsrClient.keyFileFor(context)) }
-    private val repairScope = kotlinx.coroutines.CoroutineScope(
-        kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO,
-    )
-
     /** 自己的提示音（STREAM_MUSIC 上播，不受静音系统音量影响）。 */
     private val tone by lazy {
         runCatching { android.media.ToneGenerator(AudioManager.STREAM_MUSIC, CUE_VOLUME) }.getOrNull()
@@ -165,27 +159,11 @@ class CallModeController(
                 return
             }
             lastUtterance = text
-            // 先把音频存档（连同这次识别结果），万一听错了还能回头重听
-            val clipped = runCatching { recorder.wasClipped() }.getOrDefault(false)
-            val clip = runCatching { recorder.saveUtterance(text) }.getOrNull()
+            // 先把音频存档（连同这次识别结果），万一听错了还能回头重听。
+            // 注意：这里**不**自动重听。「削头就用 Qwen 补一遍」那条自动路径已经移除 ——
+            // 背景音乐会让能量检测误判，每次都多花一次 Qwen 调用。要重听就手动来。
+            runCatching { recorder.saveUtterance(text) }
             pause()
-
-            // 识别器重开的空窗吃掉了开头：用我们手里的完整音频重听一遍，
-            // 拿更完整的文本再交出去（只在这种情况多花约 1 秒）。
-            if (clipped && clip != null && asr.hasKey()) {
-                log("clipped start detected -> re-transcribing the full clip")
-                repairScope.launch {
-                    val repaired = runCatching { asr.transcribe(clip) }.getOrNull()?.getOrNull()
-                    val finalText = repaired?.trim().orEmpty()
-                    if (finalText.length > text.length) {
-                        log("repair: " + text.length + " -> " + finalText.length + " chars")
-                        main.post {
-                            if (active) onUtterance(finalText)
-                        }
-                    }
-                }
-                return
-            }
             main.removeCallbacks(watchdog)
             main.postDelayed(watchdog, WATCHDOG_MS)
             onUtterance(text)
