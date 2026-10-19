@@ -490,6 +490,7 @@ fun HomePageContent(
 
         streamingJob = voiceScope.launch {
             callModeController.pause()
+            callModeController.setSpeaking(true)
             var spoken = 0
             var spokenPrefix = ""
             var stableFor = 0
@@ -546,6 +547,7 @@ fun HomePageContent(
                 voiceSpeaker.awaitIdle()
                 voiceSpeaker.note("stream done: spokenChars=" + spoken)
             } finally {
+                callModeController.setSpeaking(false)
                 streamingTurnId = -1L
                 streamingJob = null
                 if (latestListenMode) callModeController.resume()
@@ -582,6 +584,30 @@ fun HomePageContent(
             latestViewModel.sendIntent(HomeChatIntent.Send)
         }
     }
+    // 打断只在戴耳机时启用：外放会让麦克风听见 agent 自己，产生自我打断。
+    // 有耳机（有线/蓝牙/USB）时，用户说话就是真的在说话。
+    LaunchedEffect(listenMode) {
+        fun hasEarphones(): Boolean = runCatching {
+            val am = voiceContext.getSystemService(android.content.Context.AUDIO_SERVICE)
+                as android.media.AudioManager
+            am.getDevices(android.media.AudioManager.GET_DEVICES_OUTPUTS).any {
+                it.type == android.media.AudioDeviceInfo.TYPE_WIRED_HEADPHONES ||
+                    it.type == android.media.AudioDeviceInfo.TYPE_WIRED_HEADSET ||
+                    it.type == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
+                    it.type == android.media.AudioDeviceInfo.TYPE_USB_HEADSET
+            }
+        }.getOrDefault(false)
+
+        callModeController.bargeIn = hasEarphones()
+        callModeController.onBargeIn = {
+            speechCancelled = true
+            voiceSpeaker.stop()
+            callModeController.setSpeaking(false)
+            callModeController.resume()
+        }
+        voiceSpeaker.note("barge-in=" + callModeController.bargeIn)
+    }
+
     LaunchedEffect(listenMode) {
         if (listenMode) callModeController.start() else callModeController.stop()
 

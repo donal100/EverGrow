@@ -59,6 +59,20 @@ class CallModeController(
     private var ignoreUntilMs = 0L
 
     /**
+     * 打断（barge-in）：念话期间仍然听，用户一开口就掐掉播放。
+     * 只在戴耳机时开启 —— 外放时麦克风会把 agent 自己的声音当成人声，自己打断自己。
+     */
+    @Volatile
+    var bargeIn = false
+
+    /** 用户开口打断时要做什么（通常是停播 + 重新开麦）。 */
+    var onBargeIn: (() -> Unit)? = null
+
+    /** agent 是否正在播报。 */
+    @Volatile
+    private var speakingNow = false
+
+    /**
      * 识别器每次开麦/收尾都有自己的提示音，通话模式不停地重开，于是「哔、哔、哔」。
      * Android 没有关闭它的 API，只能在我们收音期间把系统/通知两路音量压到 0 ——
      * 媒体音量绝不碰：跑步时用户多半在放音乐。
@@ -184,7 +198,13 @@ class CallModeController(
             // 没有超时、没有空窗、也没有那串空闲提示音。
             recorder.onVoiceActivity = { speaking ->
                 main.post {
-                    if (!active || paused) return@post
+                    if (!active) return@post
+                    if (speakingNow && bargeIn && speaking) {
+                        log("vad: user spoke while we were talking -> barge in")
+                        onBargeIn?.invoke()
+                        return@post
+                    }
+                    if (paused) return@post
                     if (speaking) {
                         if (!listening) log("vad: speech onset -> open recogniser")
                         startListening()
@@ -234,6 +254,11 @@ class CallModeController(
         main.removeCallbacks(restart)
         // 不再主动开麦：VAD 检测到用户开口才开。这是「不轮询」的关键。
         log("resume")
+    }
+
+    /** 播报开始/结束时告诉控制器，打断逻辑靠它判断。 */
+    fun setSpeaking(speaking: Boolean) {
+        speakingNow = speaking
     }
 
     /** 让回声过滤器知道 agent 刚说过什么。 */
