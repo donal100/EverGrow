@@ -130,6 +130,9 @@ class UtteranceRecorder(private val filesDir: File) {
                     }
                     totalWritten += n
                 }
+                // 滚动存档（默认最近 5 分钟，10 秒一个文件），只写盘，不参与识别。
+                // 好处：识别器晚开/听错/没反应时，事后还能从磁盘上重听那几秒。
+                archiveCopy(buf, n)
             }
         }.also { it.isDaemon = true; it.start() }
         purge()
@@ -155,6 +158,44 @@ class UtteranceRecorder(private val filesDir: File) {
 
     /** 当前噪声底，诊断用。 */
     fun floor(): Int = noiseFloor.toInt()
+
+    /** 存档用的 10 秒段缓冲。 */
+    private val seg = ShortArray(sampleRate * SEGMENT_SECONDS)
+    private var segFill = 0
+
+    /**
+     * 把刚读到的样本追加进当前段，满了就丢给 io 线程写 wav。
+     * 写完顺手清掉超过 ARCHIVE_MINUTES 的旧段 —— 磁盘占用恒定在 5 分钟 ≈ 10MB。
+     */
+    private fun archiveCopy(buf: ShortArray, n: Int) {
+        var copied = 0
+        while (copied < n) {
+            val take = minOf(n - copied, seg.size - segFill)
+            System.arraycopy(buf, copied, seg, segFill, take)
+            segFill += take
+            copied += take
+            if (segFill >= seg.size) {
+                val snapshot = seg.copyOf()
+                val startMs = System.currentTimeMillis() - SEGMENT_SECONDS * 1000L
+                segFill = 0
+                io.execute { runCatching { writeSegment(snapshot, startMs); purgeArchive() } }
+            }
+        }
+    }
+
+    private fun writeSegment(pcm: ShortArray, startMs: Long) {
+        val d = File(filesDir, ARCHIVE_DIR)
+        if (!d.exists()) d.mkdirs()
+        File(d, "seg_" + startMs + ".wav").writeBytes(wavBytes(pcm))
+    }
+
+    private fun purgeArchive() {
+        val cutoff = System.currentTimeMillis() - ARCHIVE_MINUTES * 60_000L
+        File(filesDir, ARCHIVE_DIR).listFiles()?.forEach { f ->
+            val stamp = f.name.removePrefix("seg_").removeSuffix(".wav").toLongOrNull() ?: return@forEach
+            if (stamp < cutoff) runCatching { f.delete() }
+        }
+    }
 
     /** VAD 判定的开口位置（帧计数），比识别器早，用于存盘时保住句首。 */
     private var vadStart = -1L
@@ -273,5 +314,9 @@ class UtteranceRecorder(private val filesDir: File) {
         const val ONSET_FRAMES = 1
         const val END_FRAMES = 6
         const val MAX_AGE_MS = 20 * 60 * 1000L
+        /** 滚动存档：每段 10 秒，只保留最近 5 分钟（≈10MB） */
+        const val SEGMENT_SECONDS = 10
+        const val ARCHIVE_MINUTES = 5L
+        const val ARCHIVE_DIR = "voice_ring"
     }
 }
