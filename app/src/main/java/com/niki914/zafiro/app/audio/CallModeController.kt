@@ -433,7 +433,10 @@ class CallModeController(
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-US")
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
-            // 端点检测：停顿 900ms 就当一句话说完（默认更长，通话模式要快）
+            // 端点检测：停顿 1.8 秒才算说完。
+            // 之前是 1.2 秒，实测把一个自然停顿切成两句 —— 用户说
+            // 「so you mean …（停顿）… that you'll warm it up in the background」，
+            // 识别器只交出 "so you mean"，后面半句因为已经开始生成回答而被丢掉。
             putExtra(
                 RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS,
                 COMPLETE_SILENCE_MS,
@@ -486,7 +489,7 @@ class CallModeController(
         const val CUE_MS = 60
         const val GRACE_MS = 700L
         const val WATCHDOG_MS = 25_000L
-        const val COMPLETE_SILENCE_MS = 1_200L
-        const val POSSIBLY_COMPLETE_SILENCE_MS = 600L
+        const val COMPLETE_SILENCE_MS = 1_800L
+        const val POSSIBLY_COMPLETE_SILENCE_MS = 1_000L
     }
 }
