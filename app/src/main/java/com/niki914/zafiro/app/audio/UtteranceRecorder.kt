@@ -115,6 +115,9 @@ class UtteranceRecorder(private val filesDir: File) {
                 }
                 if (!speakingDetected && aboveCount >= ONSET_FRAMES) {
                     speakingDetected = true
+                    // 记下真正的开口位置。识别器的 onBeginningOfSpeech 通常晚 0.5-1.5 秒，
+                    // 用它存盘会把整句开头切掉（实测丢了 "Okay, now translate"）。
+                    vadStart = totalWritten
                     runCatching { onVoiceActivity?.invoke(true) }
                 } else if (speakingDetected && belowCount >= END_FRAMES) {
                     speakingDetected = false
@@ -153,6 +156,9 @@ class UtteranceRecorder(private val filesDir: File) {
     /** 当前噪声底，诊断用。 */
     fun floor(): Int = noiseFloor.toInt()
 
+    /** VAD 判定的开口位置（帧计数），比识别器早，用于存盘时保住句首。 */
+    private var vadStart = -1L
+
     fun markSpeechStart() {
         speechStart = totalWritten
     }
@@ -171,11 +177,15 @@ class UtteranceRecorder(private val filesDir: File) {
      */
     fun saveUtterance(recognisedText: String): File? {
         val googleStart = speechStart
+        val vad = vadStart
         val end = speechEnd
         speechStart = -1L
         speechEnd = -1L
+        vadStart = -1L
         if (googleStart < 0 || end <= googleStart) return null
-        val start = googleStart
+        // 起点用能量起点（VAD）和识别器起点里更早的那个：识别器晚开时，
+        // 存档里仍然保留下整段话，事后可以用 Qwen 重听补回来。
+        val start = if (vad in 0 until googleStart) vad else googleStart
         val samples = end - start
         if (samples < sampleRate / 4 || samples > sampleRate * ringSeconds) return null
 
