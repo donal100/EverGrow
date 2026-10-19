@@ -45,13 +45,16 @@ object Translator {
     @Volatile private var session: TranslateSession? = null
     @Volatile private var speaker: VoiceReplySpeaker? = null
     @Volatile private var busy = false
+    @Volatile private var realtime: RealtimeTranslator? = null
+
+    @Volatile var state: String = "idle"
     @Volatile private var direction: String = "two-way"
     @Volatile private var routing: String = "speaker"
 
     @Volatile var lastHeard: String = ""
     @Volatile var lastTranslated: String = ""
 
-    val isRunning: Boolean get() = session != null
+    val isRunning: Boolean get() = session != null || realtime != null
     val mode: String get() = direction
     val audioRoute: String get() = routing
 
@@ -77,7 +80,35 @@ object Translator {
         }.also { it.start() }
     }
 
+    /**
+     * 实时引擎：一条 WebSocket，边听边译边说，延迟 ≈1.2s 起。
+     * 目标语言锁定（en / zh），输出走耳机。
+     */
+    fun startRealtime(ctx: Context, target: String) {
+        if (realtime != null) return
+        val app = ctx.applicationContext
+        appCtx = app
+        direction = if (target == "zh") "to-chinese" else "to-english"
+        routing = AudioRouter.routeToEarphones(app)
+        state = "connecting"
+        realtime = RealtimeTranslator(
+            app,
+            if (target == "zh") "Simplified Chinese" else "English",
+            { text -> lastTranslated = text },
+            { s -> state = s },
+        ).also { it.start() }
+    }
+
+    fun stopRealtime() {
+        realtime?.stop()
+        realtime = null
+        appCtx?.let { AudioRouter.reset(it) }
+        routing = "speaker"
+        state = "idle"
+    }
+
     fun stop() {
+        stopRealtime()
         session?.stop()
         session = null
         speaker?.stop()

@@ -46,6 +46,18 @@ object AudioRouter {
         }
     }
 
+    /** 耳机输出设备（给 AudioTrack.setPreferredDevice 用）。 */
+    fun earphones(ctx: Context): AudioDeviceInfo? {
+        val am = ctx.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return null
+        return am.getDevices(AudioManager.GET_DEVICES_OUTPUTS).firstOrNull {
+            it.type == AudioDeviceInfo.TYPE_WIRED_HEADPHONES ||
+                it.type == AudioDeviceInfo.TYPE_WIRED_HEADSET ||
+                it.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
+                it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+                it.type == AudioDeviceInfo.TYPE_USB_HEADSET
+        }
+    }
+
     /** 手机内置麦克风：即使插着耳机也坚持用它。 */
     fun builtInMic(ctx: Context): AudioDeviceInfo? {
         val am = ctx.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return null
