@@ -1,7 +1,11 @@
 package com.niki914.zafiro.app.audio
 
 import android.content.Context
+import android.media.AudioAttributes
+import android.media.AudioFormat
+import android.media.AudioTrack
 import android.media.MediaPlayer
+import android.util.Base64
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -21,6 +25,7 @@ import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
+import java.io.ByteArrayOutputStream
 import java.util.concurrent.atomic.AtomicBoolean
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -163,6 +168,109 @@ class VoiceReplySpeaker(private val appContext: Context) {
     }
 
     /** 文本 -> wav。阻塞线程，取到就合成，合成好就交给播放线程。 */
+
+    /**
+     * 流式朗读：qwen3.5-omni-plus 的 PCM 边到边放。
+     *
+     * 之前的路径是「整段合成 → 下载整段 wav → 再播放」，首字延迟 ≈1.9s；
+     * 现在是「边合成边放」，首段音频 ≈1.2s 就到了，长回答的差别更明显。
+     * 返回 false 表示这条路走不通（没网/模型拒绝），调用方退回原来的合成到文件。
+     */
+    private fun streamAndPlay(text: String): Boolean {
+        if (cancelled) return true
+        val key = runCatching { File(appContext.filesDir, KEY_FILE).readText().trim() }.getOrNull()
+        if (key.isNullOrEmpty()) return false
+        val payload = JSONObject()
+            .put("model", STREAM_MODEL)
+            .put("modalities", org.json.JSONArray().put("text").put("audio"))
+            .put("audio", JSONObject().put("voice", VOICE).put("format", "pcm16"))
+            .put("stream", true)
+            .put("max_tokens", 1200)
+            .put(
+                "messages",
+                org.json.JSONArray().put(
+                    JSONObject().put("role", "user")
+                        .put("content", "Read this aloud exactly as written, nothing else: " + text)
+                )
+            )
+            .toString()
+        val request = Request.Builder()
+            .url(STREAM_ENDPOINT)
+            .addHeader("Authorization", "Bearer " + key)
+            .post(payload.toRequestBody(JSON))
+            .build()
+
+        var track: AudioTrack? = null
+        return try {
+            http.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    log("stream: HTTP " + response.code)
+                    return false
+                }
+                val source = response.body?.source() ?: return false
+                val minBuf = AudioTrack.getMinBufferSize(
+                    24_000, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
+                val t = AudioTrack.Builder()
+                    .setAudioFormat(
+                        AudioFormat.Builder()
+                            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                            .setSampleRate(24_000)
+                            .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                            .build()
+                    )
+                    .setAudioAttributes(
+                        AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_MEDIA)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                            .build()
+                    )
+                    .setBufferSizeInBytes(maxOf(minBuf * 2, 48_000))
+                    .setTransferMode(AudioTrack.MODE_STREAM)
+                    .build()
+                track = t
+                t.play()
+                playing = true
+                var gotAudio = false
+                var lines = 0
+                while (!source.exhausted() && !cancelled) {
+                    val line = source.readUtf8Line() ?: break
+                    if (!line.startsWith("data:")) continue
+                    val body = line.substring(5).trim()
+                    if (body == "[DONE]") break
+                    val ev = runCatching { JSONObject(body) }.getOrNull() ?: continue
+                    val audio = ev.optJSONArray("choices")
+                        ?.optJSONObject(0)
+                        ?.optJSONObject("delta")
+                        ?.optJSONObject("audio")
+                        ?.optString("data")
+                        .orEmpty()
+                    if (audio.isEmpty()) continue
+                    val bytes = Base64.decode(audio, Base64.DEFAULT)
+                    if (bytes.isNotEmpty()) {
+                        gotAudio = true
+                        lines++
+                        t.write(bytes, 0, bytes.size)
+                    }
+                }
+                if (cancelled) { runCatching { t.stop() } }
+                // 让缓冲里的余音念完
+                runCatching { t.stop() }
+                log("stream: done chunks=" + lines + " chars=" + text.length)
+                if (!gotAudio) return false
+                val hook = onIdle
+                if (hook != null && pending.isEmpty()) runCatching { hook() }
+                true
+            }
+        } catch (e: Throwable) {
+            log("stream failed: " + (e.message ?: e.javaClass.simpleName))
+            false
+        } finally {
+            playing = false
+            runCatching { track?.release() }
+            track = null
+        }
+    }
+
     private fun synthLoopBlocking() {
         while (true) {
             if (shutdown) return
@@ -174,6 +282,8 @@ class VoiceReplySpeaker(private val appContext: Context) {
             if (cancelled) continue
             synthBusy = true
             try {
+                // 优先流式：模型边说我们边放，首字延迟 ≈1.2s，而不是等整段合成完
+                if (streamAndPlay(text)) continue
                 val audio = runBlocking { synthesizeToFile(text) } ?: continue
                 log("synth: ready chars=" + text.length + " head=" + text.take(32) + " pending=" + pending.size)
                 if (cancelled) {
@@ -399,10 +509,13 @@ class VoiceReplySpeaker(private val appContext: Context) {
     }
 
     companion object {
+        private const val STREAM_ENDPOINT =
+            "https://maas.qwencloudapi.com/compatible-mode/v1/chat/completions"
+        private const val STREAM_MODEL = "qwen3.5-omni-plus"
         private const val ENDPOINT =
             "https://maas.qwencloudapi.com/api/v1/services/aigc/multimodal-generation/generation"
         private const val MODEL = "qwen3-tts-flash"
-        private const val VOICE = "Dylan"
+        private const val VOICE = "Serena"
         private const val KEY_FILE = "qwen_asr_key.txt"
         private val JSON = "application/json".toMediaType()
     }
