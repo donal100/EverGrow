@@ -201,6 +201,15 @@ private var voiceLatchText = ""
  */
 private val listenModeState = mutableStateOf(false)
 
+/**
+ * 发言器必须是进程级的：之前它跟着 composition 走，页面一重建 onDispose 就把
+ * 后台播放线程 cancel 掉 —— 表现是「念了第一句就没了」。
+ */
+private var sharedSpeaker: com.niki914.zafiro.app.audio.VoiceReplySpeaker? = null
+
+private fun speakerFor(context: android.content.Context) = sharedSpeaker
+    ?: com.niki914.zafiro.app.audio.VoiceReplySpeaker(context).also { sharedSpeaker = it }
+
 /** 通话模式期间使用的思考强度：语音对话要的是「马上开口」，不是深思熟虑。 */
 private const val VOICE_THINKING_LEVEL = "minimal"
 
@@ -434,7 +443,7 @@ fun HomePageContent(
     // 播的是 final 文本（流式中间态会被反复修正，边生成边念会不停改口）。
     // LocalContext.current 是 @Composable 调用，不能写在 remember{} 的 lambda 里（这条我犯过两次）
     val voiceContext = LocalContext.current.applicationContext
-    val voiceSpeaker = remember { VoiceReplySpeaker(voiceContext) }
+    val voiceSpeaker = remember { speakerFor(voiceContext) }
     // 播报不能挂在 composition 的 LaunchedEffect 上：效果随 key 重启，会把正在进行的
     // 云端合成一起取消（日志里的 "The coroutine scope left the composition" 就是这个），
     // 于是每次都被兜底的本机 TTS 抢着念 —— 听感上就是「一直重复」。给播报一条自己的命。
@@ -453,7 +462,8 @@ fun HomePageContent(
     DisposableEffect(Unit) {
         onDispose {
             voiceScope.cancel()
-            voiceSpeaker.release()
+            // 只停止当前播放，不销毁发言器：它要活过页面重建
+            voiceSpeaker.stop()
         }
     }
     // —— 语音播报：边生成边念 ——
@@ -581,7 +591,12 @@ fun HomePageContent(
             } else {
                 val restore = savedThinkingLevel
                 savedThinkingLevel = null
-                if (restore != null && cfg.thinkingLevel != restore) {
+                // 只在「当前值还是我们改的那档」时还原：用户若在通话模式期间手动改过，
+                // 那是他的新选择，别用旧值覆盖掉。
+                if (restore != null &&
+                    cfg.thinkingLevel == VOICE_THINKING_LEVEL &&
+                    cfg.thinkingLevel != restore
+                ) {
                     XRepo.llmConfigs.upsert(cfg.copy(thinkingLevel = restore))
                 }
             }

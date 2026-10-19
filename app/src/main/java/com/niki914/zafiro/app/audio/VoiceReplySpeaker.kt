@@ -110,6 +110,16 @@ class VoiceReplySpeaker(private val appContext: Context) {
     fun note(msg: String) = log(msg)
 
     /** 排队念一句（流式播报用）；合成与播放会在后台流水线里接续。 */
+    /** 清掉以前会话残留的合成文件（异常退出会留下几十个 wav）。 */
+    private fun pruneCache() {
+        runCatching {
+            val cutoff = System.currentTimeMillis() - 30 * 60 * 1000L
+            appContext.cacheDir.listFiles { f -> f.name.startsWith("tts_") && f.name.endsWith(".wav") }
+                ?.filter { it.lastModified() < cutoff }
+                ?.forEach { it.delete() }
+        }
+    }
+
     fun submit(text: String) {
         val clean = SpeechOutput.toSpeakable(text)
         if (clean.isBlank()) return
@@ -117,6 +127,7 @@ class VoiceReplySpeaker(private val appContext: Context) {
         log("submit chars=" + clean.length + " head=" + clean.take(40) + " queued=" + (pending.size + 1))
         pending.offer(clean)
         if (workerStarted.compareAndSet(false, true)) {
+            pruneCache()
             workerScope.launch { workerLoop() }
         }
     }
@@ -134,6 +145,7 @@ class VoiceReplySpeaker(private val appContext: Context) {
             val prepared = ready
             if (prepared != null) {
                 ready = null
+                log("worker: playing prefetched " + prepared.name)
                 playing = true
                 try {
                     runCatching { playBlocking(prepared) }
