@@ -11,15 +11,16 @@
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
     <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" />
-    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <!-- 定位：给 agent 的 py_gps 工具读取原始 GPS 数据（经纬度/精度/高度/速度/航向） -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
-    <!-- 跑步记录：前台定位服务的类型权限，以及锁屏后继续定位的后台权限 -->
+    <!-- 跑步记录：只要前台服务的类型权限。前台服务本身就是「正在使用中」，
+         不需要 ACCESS_BACKGROUND_LOCATION —— 那条权限对银行类 App 的扫描器来说
+         是高风险信号，而这里并不需要它。文件写入同理，改用 MediaStore，
+         于是 MANAGE_EXTERNAL_STORAGE（全盘访问）也一起去掉了。 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
-    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <uses-feature
