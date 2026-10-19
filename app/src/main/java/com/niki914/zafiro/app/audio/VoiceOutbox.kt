@@ -139,8 +139,13 @@ object VoiceOutbox {
         if (text.isNotEmpty()) submitSafe(text)
     }
 
-    /** 目标片段时长（秒）。可在 filesDir/voice_tuning.txt 里用 clip_s=10 覆盖。 */
-    private var targetClipSeconds: Double = 9.0
+    /**
+     * 目标片段时长（秒）。语音已经改成流式合成，一次请求内语调是连贯的，
+     * 所以不再需要按 9 秒切段 —— 切得越多接缝越多。现在默认攒到约 18 秒
+     * （≈300 字符）才在句号处发一次，普通回答基本就是「整条一次流式」。
+     * 可用 filesDir/voice_tuning.txt 里的 clip_s= 覆盖。
+     */
+    private var targetClipSeconds: Double = 18.0
     private var tuningLoaded = false
 
     private fun loadTuning() {
@@ -153,7 +158,7 @@ object VoiceOutbox {
                 val parts = line.split("=", limit = 2)
                 if (parts.size != 2) return@forEach
                 if (parts[0].trim() == "clip_s") {
-                    parts[1].trim().toDoubleOrNull()?.let { targetClipSeconds = it.coerceIn(3.0, 15.0) }
+                    parts[1].trim().toDoubleOrNull()?.let { targetClipSeconds = it.coerceIn(3.0, 60.0) }
                 }
             }
         }
@@ -165,8 +170,8 @@ object VoiceOutbox {
     /** Dylan 的语速：约 175 词/分，换算成每秒字符数。 */
     private const val CHARS_PER_SECOND = 15.0
 
-    /** 上限：再长就先发，别让长回答迟迟不出声（≈16 秒语音）。 */
-    private const val MAX_CLIP_SECONDS = 16.0
+    /** 上限：再长就先发，别让长回答迟迟不出声（≈40 秒语音）。 */
+    private const val MAX_CLIP_SECONDS = 40.0
 
     /** 新一轮开始：允许把同样的文本再念一次。 */
     fun beginTurn() {
