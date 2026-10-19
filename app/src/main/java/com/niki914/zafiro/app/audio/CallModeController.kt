@@ -78,6 +78,10 @@ class CallModeController(
     @Volatile
     private var shutDown = false
 
+    /** 刚拿到结果后给 tick 的冷却（和回声静音窗口不是一回事，别混用）。 */
+    @Volatile
+    private var tickCooldownUntil = 0L
+
     /**
      * 识别器每次开麦/收尾都有自己的提示音，通话模式不停地重开，于是「哔、哔、哔」。
      * Android 没有关闭它的 API，只能在我们收音期间把系统/通知两路音量压到 0 ——
@@ -134,7 +138,7 @@ class CallModeController(
                 }
                 // 正常收音
                 if (!paused && !listening && loudTicks >= 1 &&
-                    System.currentTimeMillis() >= ignoreUntilMs
+                    System.currentTimeMillis() >= tickCooldownUntil
                 ) {
                     log("tick: loud -> open recogniser (floor=" + recorder.floor() + ")")
                     startListening()
@@ -190,8 +194,10 @@ class CallModeController(
 
         override fun onResults(results: Bundle?) {
             listening = false
-            // 刚出结果，识别器还在收尾：给 tick 一个冷却，别立刻抢着开新会话
-            ignoreUntilMs = System.currentTimeMillis() + 900
+            // 注意：这里只能设 tick 冷却，绝不能动 ignoreUntilMs ——
+            // 下面就有「在静音窗口内就丢弃转写」的判断，用同一个字段会把刚识别出来的
+            // 这句话自己丢掉（实测：每次都 drop，表现为完全听不见）。
+            tickCooldownUntil = System.currentTimeMillis() + 900
             errorStreak = 0
             val text = results
                 ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
