@@ -203,8 +203,6 @@ class VoiceReplySpeaker(private val appContext: Context) {
      */
     private fun streamAndPlay(text: String): Boolean {
         if (cancelled) return true
-        // 极短回答（一个词）用普通合成：流式对 5 个字符没有意义，
-        // 实测反而更容易卡住（"Nine." 只回一个 chunk 就停住 19 秒）。
         if (text.length <= 12) return false
         val key = runCatching { File(appContext.filesDir, KEY_FILE).readText().trim() }.getOrNull()
         if (key.isNullOrEmpty()) return false
@@ -214,13 +212,9 @@ class VoiceReplySpeaker(private val appContext: Context) {
             .put("audio", JSONObject().put("voice", VOICE).put("format", "pcm16"))
             .put("stream", true)
             .put("max_tokens", 1200)
-            .put(
-                "messages",
-                org.json.JSONArray().put(
-                    JSONObject().put("role", "user")
-                        .put("content", "Read this aloud exactly as written, nothing else: " + text)
-                )
-            )
+            .put("messages", org.json.JSONArray().put(
+                JSONObject().put("role", "user")
+                    .put("content", "Read this aloud exactly as written, nothing else: " + text)))
             .toString()
         val request = Request.Builder()
             .url(STREAM_ENDPOINT)
@@ -228,102 +222,53 @@ class VoiceReplySpeaker(private val appContext: Context) {
             .post(payload.toRequestBody(JSON))
             .build()
 
-        var track: AudioTrack? = null
         return try {
             streamHttp.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) {
-                    log("stream: HTTP " + response.code)
-                    return false
-                }
+                if (!response.isSuccessful) { log("stream: HTTP " + response.code); return false }
                 val source = response.body?.source() ?: return false
-                val minBuf = AudioTrack.getMinBufferSize(
-                    24_000, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
-                val t = AudioTrack.Builder()
-                    .setAudioFormat(
-                        AudioFormat.Builder()
-                            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                            .setSampleRate(24_000)
-                            .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-                            .build()
-                    )
-                    .setAudioAttributes(
-                        AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_MEDIA)
-                            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                            .build()
-                    )
-                    .setBufferSizeInBytes(maxOf(minBuf * 2, 48_000))
-                    .setTransferMode(AudioTrack.MODE_STREAM)
-                    .build()
-                track = t
-                log("focus granted=" + requestFocus())
-                playing = true
-                // 先攒够 0.6 秒再开播：网络每抖一下就让 AudioTrack 干涸的话，
-                // 听到的就是字与字之间的「跳」。宁可晚 0.6 秒开始，声音要连续。
-                val preBuffer = PREBUFFER_BYTES
-                val pre = ByteArrayOutputStream()
-                var gotAudio = false
-                var lines = 0
-                var writtenFrames = 0L
-                val captured = ByteArrayOutputStream()
+                val pcm = ByteArrayOutputStream()
                 var lastChunkAt = 0L
-                var worstGapMs = 0L
+                var worstGap = 0L
                 var jitter = 0
+                var chunks = 0
                 while (!source.exhausted() && !cancelled) {
                     val line = source.readUtf8Line() ?: break
                     if (!line.startsWith("data:")) continue
                     val body = line.substring(5).trim()
                     if (body == "[DONE]") break
                     val ev = runCatching { JSONObject(body) }.getOrNull() ?: continue
-                    val audio = ev.optJSONArray("choices")
-                        ?.optJSONObject(0)
-                        ?.optJSONObject("delta")
-                        ?.optJSONObject("audio")
-                        ?.optString("data")
-                        .orEmpty()
+                    val audio = ev.optJSONArray("choices")?.optJSONObject(0)
+                        ?.optJSONObject("delta")?.optJSONObject("audio")?.optString("data").orEmpty()
                     if (audio.isEmpty()) continue
-                    val bytes = squeezeSilence(Base64.decode(audio, Base64.DEFAULT))
+                    val bytes = Base64.decode(audio, Base64.DEFAULT)
                     if (bytes.isEmpty()) continue
-                    gotAudio = true
-                    lines++
-                    captured.write(bytes)
-                    // 网络抖动诊断：相邻音频块之间空太久，播放就会干涸
+                    pcm.write(squeezeSilence(bytes))
+                    chunks++
                     val now = System.currentTimeMillis()
                     if (lastChunkAt > 0) {
                         val gap = now - lastChunkAt
-                        if (gap > 120) { jitter++; if (gap > worstGapMs) worstGapMs = gap }
+                        if (gap > 120) { jitter++; if (gap > worstGap) worstGap = gap }
                     }
                     lastChunkAt = now
-                    if (t.playState != AudioTrack.PLAYSTATE_PLAYING) {
-                        pre.write(bytes)
-                        if (pre.size() >= preBuffer) {
-                            val head = pre.toByteArray()
-                            pre.reset()
-                            t.write(head, 0, head.size)
-                            writtenFrames += head.size / 2
-                            t.play()
-                        }
-                    } else {
-                        t.write(bytes, 0, bytes.size)
-                        writtenFrames += bytes.size / 2
-                    }
                 }
-                // 还有没播出去的部分：先补上预缓冲里剩下的，再等播放头走完
-                if (pre.size() > 0) {
-                    val tail = pre.toByteArray()
-                    pre.reset()
-                    if (t.playState != AudioTrack.PLAYSTATE_PLAYING) t.play()
-                    t.write(tail, 0, tail.size)
-                    writtenFrames += tail.size / 2
+                val raw = pcm.toByteArray()
+                log("stream: done chunks=" + chunks + " chars=" + text.length +
+                    " worstGapMs=" + worstGap + " jitter=" + jitter)
+                if (raw.isEmpty() || cancelled) return raw.isNotEmpty()
+                saveSample(raw, text, worstGap, jitter, chunks)
+                // 用文件播放而不是 AudioTrack 流式播放：实测识别器占着音频时
+                // AudioTrack 的播放头根本不前进（playback head=0，writtenFrames=71040），
+                // 而 MediaPlayer 走同一条路是正常的。
+                val file = File(appContext.cacheDir, "tts_stream_" + System.currentTimeMillis() + ".wav")
+                file.writeBytes(wavBytes(raw))
+                playing = true
+                try {
+                    requestFocus()
+                    runBlocking { playBlocking(file) }
+                } finally {
+                    playing = false
+                    file.delete()
                 }
-                drain(t, writtenFrames)
-                // 诊断：写进去的和真的播出去的帧数。两者差得远 = 音频被系统压掉了。
-                log("playback head=" + t.playbackHeadPosition + " writtenFrames=" + writtenFrames +
-                    " underruns=" + t.underrunCount)
-                log("stream: done chunks=" + lines + " chars=" + text.length +
-                    " worstGapMs=" + worstGapMs + " jitter=" + jitter)
-                saveSample(captured.toByteArray(), text, worstGapMs, jitter, lines)
-                if (!gotAudio) return false
                 val hook = onIdle
                 if (hook != null && pending.isEmpty()) runCatching { hook() }
                 true
@@ -331,11 +276,32 @@ class VoiceReplySpeaker(private val appContext: Context) {
         } catch (e: Throwable) {
             log("stream failed: " + (e.message ?: e.javaClass.simpleName))
             false
-        } finally {
-            playing = false
-            runCatching { track?.release() }
-            track = null
         }
+    }
+
+    /** 24kHz PCM16 单声道 + wav 头。 */
+    private fun wavBytes(pcm: ByteArray): ByteArray {
+        val header = ByteArray(44)
+        fun put32(off: Int, v: Int) {
+            header[off] = (v and 0xFF).toByte()
+            header[off + 1] = ((v shr 8) and 0xFF).toByte()
+            header[off + 2] = ((v shr 16) and 0xFF).toByte()
+            header[off + 3] = ((v shr 24) and 0xFF).toByte()
+        }
+        fun put16(off: Int, v: Int) {
+            header[off] = (v and 0xFF).toByte()
+            header[off + 1] = ((v shr 8) and 0xFF).toByte()
+        }
+        "RIFF".toByteArray().copyInto(header, 0)
+        put32(4, pcm.size + 36)
+        "WAVE".toByteArray().copyInto(header, 8)
+        "fmt ".toByteArray().copyInto(header, 12)
+        put32(16, 16); put16(20, 1); put16(22, 1)
+        put32(24, 24_000); put32(28, 48_000)
+        put16(32, 2); put16(34, 16)
+        "data".toByteArray().copyInto(header, 36)
+        put32(40, pcm.size)
+        return header + pcm
     }
 
     /**
