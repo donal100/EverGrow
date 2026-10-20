@@ -6,6 +6,7 @@ import com.niki914.okia.Okia
 import com.niki914.okia.TurnOptions
 import com.niki914.okia.conversation.Conversation
 import com.niki914.okia.conversation.SessionSnapshot
+import com.niki914.okia.error.LLMError
 import com.niki914.okia.error.RetryPolicy
 import com.niki914.okia.event.TurnEvent
 import com.niki914.okia.hooks.Hooks
@@ -55,6 +56,9 @@ internal class OkiaSessionAssembler(
 ) {
     internal companion object {
         const val LOG_TAG = "niki914_zafiro_OkiaSessionAssembler"
+
+        /** 摘要失败日志里保留的响应体字符数：够看清 4xx 原因，又不至于刷屏。 */
+        private const val SUMMARY_ERROR_BODY_CHARS = 600
 
         /**
          * 请求级诊断：每段 HTTP 请求一行。出问题时用来区分「一个请求在复读」
@@ -233,12 +237,39 @@ internal class OkiaSessionAssembler(
      * 用「重放前缀」的方式生成摘要（对齐 DeepSeek Harness）：
      * 开一个配置相同的会话，把真实的消息序列原样 append 回去，
      * 最后把压缩指令作为一条 user 消息发送。前缀一致 -> KV cache 命中。
+     *
+     * 重放被服务端拒绝（4xx / 空回合 / 超时）时退回「只发指令」重试一次：
+     * 摘要功能不能因此停摆，且失败原因（code / status / body 片段）写日志。
      */
     suspend fun generateSummary(
         protocol: LlmProtocol,
         config: ResolvedLlmConfig,
         systemPrompt: String,
         messages: List<Message>,
+        instruction: String,
+    ): String {
+        Logger.i(
+            LOG_TAG,
+            "summary request: replay=${messages.size} instructionChars=${instruction.length}"
+        )
+        var summary = runSummaryPass(protocol, config, systemPrompt, messages, instruction)
+        if (summary.isBlank() && messages.isNotEmpty()) {
+            Logger.w(LOG_TAG, "summary replay produced no text; retry with instruction only")
+            summary = runSummaryPass(protocol, config, systemPrompt, emptyList(), instruction)
+        }
+        Logger.i(LOG_TAG, "summary done chars=${summary.length}")
+        return summary
+    }
+
+    /**
+     * 一次摘要请求：append 历史（可为空）后发送压缩指令，返回模型文本。
+     * 失败返回空串，并把失败码 / HTTP 状态 / 响应体片段写进日志。
+     */
+    private suspend fun runSummaryPass(
+        protocol: LlmProtocol,
+        config: ResolvedLlmConfig,
+        systemPrompt: String,
+        replay: List<Message>,
         instruction: String,
     ): String {
         val endpoint = config.endpoint.ifBlank { protocolDefaultEndpointFallback(protocol) }
@@ -257,28 +288,43 @@ internal class OkiaSessionAssembler(
         }
         try {
             var summary = ""
-            Logger.i(
-                LOG_TAG,
-                "summary request: replay=${messages.size} instructionChars=${instruction.length}"
-            )
-            // 重放历史：失败就退回「只发指令」的旧行为，摘要功能不能因此停摆
-            for (msg in messages) {
-                runCatching { session.append(msg) }
+            var failure: String? = null
+            var appendFailures = 0
+            for (msg in replay) {
+                if (runCatching { session.append(msg) }.isFailure) appendFailures++
+            }
+            if (appendFailures > 0) {
+                Logger.w(
+                    LOG_TAG,
+                    "summary append failed count=$appendFailures replay=${replay.size}"
+                )
             }
             session.send(
                 text = instruction,
                 options = TurnOptions(systemPrompt = systemPrompt),
             ) { event ->
-                if (event is TurnEvent.TurnCompleted) {
-                    summary = event.message.content.filterIsInstance<ContentBlock.Text>()
+                when (event) {
+                    is TurnEvent.TurnCompleted -> summary = event.message.content
+                        .filterIsInstance<ContentBlock.Text>()
                         .joinToString("\n") { it.text }
+
+                    is TurnEvent.TurnFailed -> failure = describeFailure(event.error)
+                    is TurnEvent.TurnAborted -> failure = "aborted cause=${event.cause}"
+                    is TurnEvent.TurnIdleTimeout -> failure = "idle timeout"
+                    else -> Unit
                 }
             }
-            Logger.i(LOG_TAG, "summary done chars=${summary.length}")
+            failure?.let { Logger.w(LOG_TAG, "summary pass failed replay=${replay.size} reason=$it") }
             return summary
         } finally {
             session.close()
         }
+    }
+
+    /** 失败原因单行化：错误码 + HTTP 状态 + 响应体片段（okia 已把 body 放进 message）。 */
+    private fun describeFailure(error: LLMError): String {
+        val body = error.message.replace('\n', ' ').take(SUMMARY_ERROR_BODY_CHARS)
+        return "code=${error.code} status=${error.statusCode ?: "-"} body=$body"
     }
 
     fun validateLlmConfig(config: RuntimeLlmConfig) {
