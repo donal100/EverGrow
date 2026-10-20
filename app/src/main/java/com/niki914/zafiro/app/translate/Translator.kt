@@ -1,6 +1,7 @@
 package com.niki914.zafiro.app.translate
 
 import android.content.Context
+import com.niki914.logging.Logger
 import android.util.Base64
 import com.niki914.zafiro.app.audio.QwenAsrClient
 import com.niki914.zafiro.app.audio.VoiceReplySpeaker
@@ -38,6 +39,7 @@ object Translator {
         .build()
     private val JSON = "application/json".toMediaType()
 
+    private const val LOG_TAG = "niki914_zafiro_Translator"
     private const val BASE = "https://maas.qwencloudapi.com"
     private const val TRANSLATE_MODEL = "qwen3-livetranslate-flash"
 
@@ -46,6 +48,9 @@ object Translator {
     @Volatile private var speaker: VoiceReplySpeaker? = null
     @Volatile private var busy = false
     @Volatile private var realtime: RealtimeTranslator? = null
+
+    /** 每次 startRealtime 递增；旧的 socket 回调据此丢弃，避免覆盖新会话状态。 */
+    @Volatile private var generation = 0
 
     @Volatile var state: String = "idle"
     @Volatile private var direction: String = "two-way"
@@ -101,16 +106,29 @@ object Translator {
                 "You are a real-time interpreter. Whatever you hear, translate it into English and speak only the translation, briefly and naturally."
         }
         state = "connecting"
+        val gen = ++generation
+        Logger.i(LOG_TAG, "startRealtime mode=" + mode + " route=" + routing)
         realtime = RealtimeTranslator(
             app,
             instructions,
             halfDuplex = twoWay,
-            onTranscript = { text -> lastTranslated = text },
-            onState = { s -> state = s },
+            onTranscript = { text ->
+                lastTranslated = text
+                Logger.i(LOG_TAG, "translated: " + text.take(80))
+            },
+            // 旧 socket 的回调会晚到（stop() 里的 close(1000) 就是典型），把新会话的 "ready"
+            // 覆盖成 "closed 1000"，看上去就像根本没开起来。只认当前这一代。
+            onState = { s ->
+                if (gen == generation) {
+                    state = s
+                    Logger.i(LOG_TAG, "state=" + s)
+                }
+            },
         ).also { it.start() }
     }
 
     fun stopRealtime() {
+        generation++          // 让旧 socket 迟到的回调写不进来
         realtime?.stop()
         realtime = null
         appCtx?.let { AudioRouter.reset(it) }

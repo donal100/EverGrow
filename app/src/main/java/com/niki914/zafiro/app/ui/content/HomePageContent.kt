@@ -461,7 +461,10 @@ fun HomePageContent(
     // 用户说完一句 -> 走正常发消息链路 -> agent 回复 -> 念出来 -> 继续听。
     var listenMode by listenModeState
     // 翻译有两种用法：两个人对话（外放），或单向中译英（耳机，看片/听讲座用）
-    var translateMode by remember { mutableStateOf<String?>(null) }
+    // rememberSaveable：菜单开合或配置变化都可能重走 composition，普通 remember 会被重置成 null，
+    // 那一下 LaunchedEffect 就走 else 分支，把刚开起来的口译立刻掐掉
+    // （实测症状：toast 弹出，然后什么都没发生，socket 已经是 closed 1000）。
+    var translateMode by rememberSaveable { mutableStateOf<String?>(null) }
     var pendingUtterance by remember { mutableStateOf<String?>(null) }
     val latestListenMode by rememberUpdatedState(listenMode)
     val callModeController = remember {
@@ -600,6 +603,7 @@ fun HomePageContent(
     LaunchedEffect(translateMode) {
         val tr = com.niki914.zafiro.app.translate.Translator
         val mode = translateMode
+        Logger.i("niki914_zafiro_TranslateUi", "translateMode effect fired: mode=" + mode)
         if (mode != null) {
             callModeController.stop()
             listenMode = false
@@ -734,6 +738,7 @@ fun HomePageContent(
                         if (!granted) {
                             Toast.makeText(locationContext, "Microphone permission needed", Toast.LENGTH_SHORT).show()
                         } else {
+                            Logger.i("niki914_zafiro_TranslateUi", "menu pick: two-way")
                             translateMode = "two-way"
                             listenMode = false
                             voiceSpeaker.stop()
@@ -754,6 +759,7 @@ fun HomePageContent(
                         if (!granted) {
                             Toast.makeText(locationContext, "Microphone permission needed", Toast.LENGTH_SHORT).show()
                         } else {
+                            Logger.i("niki914_zafiro_TranslateUi", "menu pick: to-english")
                             translateMode = "to-english"
                             listenMode = false
                             voiceSpeaker.stop()
