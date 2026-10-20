@@ -12,6 +12,7 @@ import com.niki914.okia.message.contextTokens
 import com.niki914.okia.tooling.ToolRegistry
 import com.niki914.zafiro.api.AgentControl
 import com.niki914.zafiro.api.model.FileRef
+import com.niki914.zafiro.chat.agentic.CompactionBridge
 import com.niki914.zafiro.chat.compaction.Compactor
 import com.niki914.zafiro.chat.agentic.IngestedImage
 import com.niki914.zafiro.chat.agentic.PromptComposer
@@ -33,6 +34,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.flowOn
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * 独立的 Agent 底层会话引擎。
@@ -88,11 +90,18 @@ class AgentSessionEngine {
         }
     )
 
+    /**
+     * 工具（`compact`）在回合中途要求的强制压缩。
+     * 回合进行中不能改写会话树，所以先记旗标，下一轮开头那次 compact 调用强制触发。
+     */
+    private val pendingForcedCompaction = AtomicBoolean(false)
+
     init {
         // 只有用「这次对话真正的 system prompt」重放，摘要请求才和上一次请求同前缀
         compactor.systemPromptProvider = {
             runtimeState?.snapshot?.config?.finalSystemPrompt ?: ""
         }
+        CompactionBridge.register(tenantId) { requestCompaction() }
     }
 
     internal var okia: Okia?
@@ -334,7 +343,8 @@ class AgentSessionEngine {
             val contextWindow = contextWindowTokens.value
             compactor.compact(
                 session = currentSession,
-                force = false,
+                // 工具在上一轮请求过压缩时，这一轮开头强制做掉
+                force = pendingForcedCompaction.getAndSet(false),
                 contextTokens = contextTokens,
                 contextWindow = contextWindow,
                 // 把补全额度一起交进去：压缩判定要看「可用输入空间」，不是裸窗口
@@ -375,6 +385,7 @@ class AgentSessionEngine {
         prefixComposer.reset()
         runtimeState = null
         boundConfigId = ""
+        CompactionBridge.unregister(tenantId)
         Logger.i(LOG_TAG, "close session done")
     }
 
@@ -395,6 +406,28 @@ class AgentSessionEngine {
 
     suspend fun ingestUserImage(uriString: String): IngestedImage? =
         imageManager.ingestUserImage(uriString)
+
+    /**
+     * 工具入口：要求压缩当前会话。
+     *
+     * 回合进行中（工具就是在这种时候被调用的）不能改写会话树 —— 摘要检查点是一条
+     * 新的 user 消息，插在悬挂的工具调用中间会破坏工具链闭合。所以这时只记旗标，
+     * 下一轮开头 [stream] 里那次 compact 会强制触发，返回值明确说「已排期」。
+     */
+    suspend fun requestCompaction(): CompactionBridge.Outcome {
+        if (streamPipeline.turnActive.value) {
+            pendingForcedCompaction.set(true)
+            Logger.i(LOG_TAG, "compaction requested by tool during active round, scheduled for next round")
+            return CompactionBridge.Outcome.SCHEDULED
+        }
+        val committed = compact(force = true)
+        Logger.i(LOG_TAG, "compaction requested by tool, committed=$committed")
+        return if (committed) {
+            CompactionBridge.Outcome.COMMITTED
+        } else {
+            CompactionBridge.Outcome.SKIPPED
+        }
+    }
 
     suspend fun compact(force: Boolean = false): Boolean {
         val session = okia ?: run {
