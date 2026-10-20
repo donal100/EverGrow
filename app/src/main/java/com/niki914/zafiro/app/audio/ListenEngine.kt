@@ -111,8 +111,15 @@ class ListenEngine(
         if (writer != null) return
         writer = Thread {
             while (active) {
+                // 先看有没有打开的管道，再取样本。顺序反了就等于把攒下的 pre-roll
+                // 直接吃掉：poll 已经从队列里拿走那块音频，随后 out 为 null 就丢掉 ——
+                // 实测 backlog 永远是 0，pre-roll 一条都没冲到。
+                val stream = out
+                if (stream == null) {
+                    runCatching { Thread.sleep(20) }
+                    continue
+                }
                 val bytes = runCatching { queue.poll(200, TimeUnit.MILLISECONDS) }.getOrNull() ?: continue
-                val stream = out ?: continue
                 runCatching { stream.write(bytes); stream.flush() }
                     .onFailure { log("writer: " + it.message) }
             }
