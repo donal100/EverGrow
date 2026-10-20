@@ -54,9 +54,11 @@ class CallModeController(
 
     /** 播报开始：外放时把麦克风静音，耳机时保持收听（用于打断）。 */
     fun micOff() {
-        if (headphones) return
+        // 一律静音：只要我在说话，麦克风就不该听。
+        // 以前耳机时保留收听以便打断，结果 Bluetooth 耳机（A2DP）也算"耳机"，
+        // 于是外放场景照样把我说的话转回来。
         ListenBus.setMuted(true)
-        log("mic muted (speaking, no headphones)")
+        log("mic muted (speaking)")
     }
 
     /** 播报结束：恢复。 */
