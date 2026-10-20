@@ -39,6 +39,8 @@ class RealtimeTranslator(
     private val instructions: String,
     /** true：只要文字，不要语音。单人模式看字幕用 —— 少一跳合成，也没有回声问题。 */
     private val textOnly: Boolean = false,
+    /** 音色：粤语必须用专门的粤语音色，普通话音色念粤字就是「硬念」。 */
+    private val voice: String = "Serena",
     /** 外放时为 true：模型说话期间不再上传麦克风，否则它会听见自己并自问自答。 */
     private val halfDuplex: Boolean,
     private val onTranscript: (String) -> Unit,
@@ -95,7 +97,7 @@ class RealtimeTranslator(
                     .put("instructions", instructions)
                     .put("input_audio_format", "pcm16")
                 if (!textOnly) {
-                    session.put("voice", VOICE).put("output_audio_format", "pcm16")
+                    session.put("voice", voice).put("output_audio_format", "pcm16")
                 }
                 webSocket.send(JSONObject().put("type", "session.update").put("session", session).toString())
                 onState("connected")

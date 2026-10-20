@@ -120,11 +120,15 @@ object Translator {
         //     粤语尤其如此，听到才是那个味道；回声问题靠 half-duplex + 播放队列排空解决。
         //   单人（to-english / yue-en）出字幕 —— 讲座/看片时只需要文字。
         val textOnly = !twoWay
-        Logger.i(LOG_TAG, "startRealtime mode=" + mode + " route=" + routing + " textOnly=" + textOnly)
+        // 粤语音色是 Qwen 单独提供的（Rocky 粤语-阿强 / Kiki 粤语-阿清）；
+        // 用普通话音色念粤字，听得出来是硬念 —— 实测用户直接否掉。
+        val voice = if (mode == "two-way-yue") "Rocky" else "Serena"
+        Logger.i(LOG_TAG, "startRealtime mode=" + mode + " route=" + routing + " textOnly=" + textOnly + " voice=" + voice)
         realtime = RealtimeTranslator(
             app,
             instructions,
             textOnly = textOnly,
+            voice = voice,
             halfDuplex = twoWay,
             onTranscript = { text ->
                 lastTranslated = text
