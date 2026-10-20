@@ -121,7 +121,14 @@ class ListenEngine(
                 }
                 val bytes = runCatching { queue.poll(200, TimeUnit.MILLISECONDS) }.getOrNull() ?: continue
                 runCatching { stream.write(bytes); stream.flush() }
-                    .onFailure { log("writer: " + it.message) }
+                    .onFailure {
+                        log("writer: " + it.message)
+                        // 写失败 = 这条管道已经死了（日志里就是 "Stream Closed"）。
+                        // 会话重开的 350 毫秒里 out 还指着旧管道，音频全被写进死流里，
+                        // 于是 backlog 永远为 0。把这块放回队列，等新管道开起来再冲。
+                        out = null
+                        queue.offer(bytes)
+                    }
             }
         }.also { it.isDaemon = true; it.start() }
     }
