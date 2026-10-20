@@ -1243,6 +1243,7 @@ private fun HomePageContentBody(
     onToggleVoiceMode: () -> Unit = {},
     onInterruptSpeech: () -> Unit = {},
     listenMode: Boolean = false,
+    translateMode: Boolean = false,
     onToggleListenMode: () -> Unit = {},
     agentSpeaking: Boolean = false,
     onPillTap: () -> Unit = {},
