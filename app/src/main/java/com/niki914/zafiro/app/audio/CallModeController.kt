@@ -50,7 +50,11 @@ class CallModeController(
                 !audioOnHeadset() && (
                     insidePlaybackWindow(System.currentTimeMillis()) ||
                         insideToolWindow(System.currentTimeMillis())
-                    ) -> log("dropped by time window: " + text.take(40))
+                    ) -> log(
+                        "dropped by time window: app=" + (if (insidePlaybackWindow(System.currentTimeMillis())) "open" else "closed") +
+                            " tool=" + (if (insideToolWindow(System.currentTimeMillis())) "open" else "closed") +
+                            " text=" + text.take(30)
+                    )
                 // 正在播报时，麦克风听到的多半是我自己；外放没有打断功能，直接丢弃
                 VoiceOutbox.isBusy() -> log("dropped while speaking: " + text.take(40))
                 echoLikely(text) -> log("dropped as echo: " + text.take(40))
@@ -114,8 +118,11 @@ class CallModeController(
         if (parts.size < 2) return@runCatching false
         val start = parts[0].toLongOrNull() ?: return@runCatching false
         val end = parts[1].toLongOrNull() ?: 0L
-        if (now < start - LEAD_PAD_MS) return@runCatching false
-        if (end == 0L) return@runCatching (now - start) < 120_000L
+        // 文件是「py 播报工具正在出声」的声明；工具被重启/杀掉时 end 永远写不进，
+        // 窗口就永远是「开着」的 —— 实测这就是 21:19 那三条被丢掉的真正原因。
+        // 所以：没写结束时间的窗口只认 20 秒，而且整体超过 2 分钟的记录一律作废。
+        if (now - start > 120_000L) return@runCatching false
+        if (end == 0L) return@runCatching (now - start) < 20_000L
         return@runCatching now <= end + TAIL_PAD_MS
     }.getOrDefault(false)
 
