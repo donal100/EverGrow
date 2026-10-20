@@ -618,7 +618,8 @@ fun HomePageContent(
     // 字幕只在单人模式跑：双向模式仍然出声，不需要屏幕上的文字。
     LaunchedEffect(translateMode) {
         val mode = translateMode
-        if (mode == null) {
+        // 双人模式出声，不出字幕；单人模式才需要屏幕上的文字。
+        if (mode == null || mode.startsWith("two-way")) {
             translateCaption = ""
             return@LaunchedEffect
         }
