@@ -763,6 +763,27 @@ fun HomePageContent(
                     },
                 ),
                 PageChromeMenuItem(
+                    key = "translate_cantonese",
+                    title = "Translate Cantonese → English (subtitles)",
+                    onClick = {
+                        if (latestUiState.isConfigMenuVisible) {
+                            latestViewModel.sendIntent(HomeChatIntent.DismissConfigMenu)
+                        }
+                        val granted = locationContext.checkSelfPermission(
+                            Manifest.permission.RECORD_AUDIO,
+                        ) == PackageManager.PERMISSION_GRANTED
+                        if (!granted) {
+                            Toast.makeText(locationContext, "Microphone permission needed", Toast.LENGTH_SHORT).show()
+                        } else {
+                            Logger.i("niki914_zafiro_TranslateUi", "menu pick: yue-en")
+                            translateMode = "yue-en"
+                            listenMode = false
+                            voiceSpeaker.stop()
+                            Toast.makeText(locationContext, "Cantonese → English subtitles", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                ),
+                PageChromeMenuItem(
                     key = "translate_earpiece",
                     title = "Translate to English (subtitles)",
                     onClick = {

@@ -100,6 +100,11 @@ object Translator {
         val instructions = when (mode) {
             "to-chinese" ->
                 "You are a real-time interpreter. Whatever you hear, translate it into Simplified Chinese and speak only the translation, briefly and naturally."
+            // 粤语：模型是听音频的，语言靠 instruction 指定，不必改协议。
+            // 香港人讲话常夹英文词，所以要求「夹英文也照译」，不要因为半句英文就整句放弃。
+            "yue-en" ->
+                "You are a Cantonese-to-English interpreter. Whatever you hear, translate it into natural English and output English text only. " +
+                "The speaker may mix in English words or switch languages mid-sentence: still translate the whole utterance into English, keeping names and technical terms as they are."
             "two-way" ->
                 "You are a two-way interpreter between two people. If you hear Chinese, translate it into English. If you hear English, translate it into Simplified Chinese. Speak only the translation, briefly and naturally."
             else ->
