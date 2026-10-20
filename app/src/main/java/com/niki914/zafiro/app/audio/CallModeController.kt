@@ -38,8 +38,10 @@ class CallModeController(
     var onBargeIn: (() -> Boolean)? = null
 
     fun start() {
-        // 上一次会话可能留下静音状态，进来先清掉
+        // 上一次会话可能留下静音状态和半开的播报窗口，进来先清掉
         ListenBus.setMuted(false)
+        playStartAt = 0L
+        playEndAt = 0L
         ListenBus.onSentence = { text ->
             when {
                 // 外放 + 落在播报时间窗内：这段一定是喇叭的回声，按时间戳丢弃。
@@ -121,7 +123,12 @@ class CallModeController(
     private fun insidePlaybackWindow(now: Long): Boolean {
         if (playStartAt == 0L) return false
         if (now < playStartAt - LEAD_PAD_MS) return false
-        return playEndAt == 0L || now <= playEndAt
+        // 窗口只靠 micOff 打开、micOn 关闭。任何一个没配上（实测：播报结束回调没来），
+        // 窗口就会一直开着，于是每一句都被当成回声扔掉 —— 日志里连着三条
+        // "dropped by time window" 就是这么来的。
+        // 所以：没有结束时间时，只认开窗后 30 秒内的声音。
+        if (playEndAt == 0L) return (now - playStartAt) < 30_000L
+        return now <= playEndAt
     }
 
     fun pause() = Unit
