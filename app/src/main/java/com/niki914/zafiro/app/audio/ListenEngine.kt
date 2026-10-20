@@ -32,6 +32,11 @@ class ListenEngine(
     private val onSentence: (String) -> Unit,
 ) {
 
+    private companion object {
+        /** 会话重开空档里最多攒多少块（约 1 秒），超了丢最旧的。 */
+        const val MAX_BACKLOG_BLOCKS = 16
+    }
+
     private val main = Handler(Looper.getMainLooper())
     private val recorder = UtteranceRecorder(context.filesDir)
     private val queue = ArrayBlockingQueue<ByteArray>(64)
@@ -92,6 +97,13 @@ class ListenEngine(
             bytes[p++] = (v and 0xFF).toByte()
             bytes[p++] = ((v shr 8) and 0xFF).toByte()
         }
+        // 会话重开的空档里照样攒着：这些样本正是下一句话的开头。
+        // 之前 closeSession 里的 queue.clear() 把它们统一删掉，于是每次重开都吃掉
+        // 头几百毫秒 —— 实测「Do you think I should try」整段没进识别器。
+        // 攒太多就丢最旧的：断线久了不能把几秒前的旧声音当成新发言。
+        if (out == null) {
+            while (queue.size >= MAX_BACKLOG_BLOCKS) queue.poll()
+        }
         queue.offer(bytes)   // 满了就丢，绝不阻塞
     }
 
@@ -140,7 +152,8 @@ class ListenEngine(
                 }
             )
             recognizer = r
-            log("session open")
+            // backlog = 重开空档里攒下的块数；>0 就证明 pre-roll 生效了
+            log("session open backlog=" + queue.size)
         }.onFailure { log("open failed: " + it.message) }
     }
 
@@ -187,7 +200,7 @@ class ListenEngine(
     private fun closeSession() {
         runCatching { out?.close() }
         out = null
-        queue.clear()
+        // 不清队列：重开空档里攒下的就是下一句的开头，交给 writer 冲进新管道。
         runCatching { recognizer?.cancel() }
         runCatching { recognizer?.destroy() }
         recognizer = null
