@@ -143,24 +143,23 @@ class ListenEngine(
     private fun doOpen() {
         if (!active) return
         runCatching {
+            // 每句话一个全新的识别器 —— 这是唯一被验证跑通过的形态：
+            // 昨天用 Python 直接把管道喂给识别器，feed+segmented+partial 一次就出文字；
+            // 而复用同一个识别器 startListening 第二次会报 error=5（client）。
+            // 代价是每句建一次对象（几十毫秒），换来的是不会卡死。
             closeSession()
             val pipe = ParcelFileDescriptor.createPipe()
             pfdRead = pipe[0]
             pfdWrite = pipe[1]
             out = FileOutputStream(pipe[1].fileDescriptor)
-            // 优先用「端上识别器」：实测网络识别器会连续 error=11（server disconnected）
-            // 和 error=7（network），会话就这么断掉，听感上就是「它又不理我了」。
-            // 端上模型不依赖网络，台词一样（Google 的 en-US/中文模型都在本机）。
             val onDevice = preferOnDevice && onDeviceEnabled() &&
                 android.os.Build.VERSION.SDK_INT >= 31 &&
                 runCatching { SpeechRecognizer.isOnDeviceRecognitionAvailable(context) }.getOrDefault(false)
-            val r = if (onDevice) {
-                SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
-            } else {
-                SpeechRecognizer.createSpeechRecognizer(context)
-            }
+            val r = if (onDevice) SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
+                    else SpeechRecognizer.createSpeechRecognizer(context)
             log("recognizer=" + (if (onDevice) "on-device" else "network"))
             r.setRecognitionListener(listener)
+            recognizer = r
             r.startListening(
                 Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                     putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
@@ -239,6 +238,17 @@ class ListenEngine(
         private fun first(b: Bundle?): String = runCatching {
             b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.trim().orEmpty()
         }.getOrDefault("")
+    }
+
+    /** 只关管道/流，保留识别器对象。 */
+    private fun closePipe() {
+        runCatching { out?.close() }
+        out = null
+        queue.clear()
+        runCatching { pfdRead?.close() }
+        runCatching { pfdWrite?.close() }
+        pfdRead = null
+        pfdWrite = null
     }
 
     private fun closeSession() {
