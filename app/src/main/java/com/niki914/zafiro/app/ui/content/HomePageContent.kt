@@ -460,7 +460,8 @@ fun HomePageContent(
     // —— 通话模式（Listen mode）：像打电话一样一直听着 ——
     // 用户说完一句 -> 走正常发消息链路 -> agent 回复 -> 念出来 -> 继续听。
     var listenMode by listenModeState
-    var translateMode by remember { mutableStateOf(false) }
+    // 翻译有两种用法：两个人对话（外放），或单向中译英（耳机，看片/听讲座用）
+    var translateMode by remember { mutableStateOf<String?>(null) }
     var pendingUtterance by remember { mutableStateOf<String?>(null) }
     val latestListenMode by rememberUpdatedState(listenMode)
     val callModeController = remember {
@@ -598,10 +599,11 @@ fun HomePageContent(
     // 菜单负责开，药丸负责关：口译开着的时候药丸显示 Translate，点一下关掉。
     LaunchedEffect(translateMode) {
         val tr = com.niki914.zafiro.app.translate.Translator
-        if (translateMode) {
+        val mode = translateMode
+        if (mode != null) {
             callModeController.stop()
             listenMode = false
-            tr.startRealtime(voiceContext, "two-way")
+            tr.startRealtime(voiceContext, mode)
         } else {
             tr.stop()
         }
@@ -720,9 +722,8 @@ fun HomePageContent(
                     },
                 ),
                 PageChromeMenuItem(
-                    key = "translate_mode",
-                    // 口译由菜单开启，药丸负责关闭（药丸会变成 Translate）。
-                    title = "Real-time translate",
+                    key = "translate_dialogue",
+                    title = "Translate: two people",
                     onClick = {
                         if (latestUiState.isConfigMenuVisible) {
                             latestViewModel.sendIntent(HomeChatIntent.DismissConfigMenu)
@@ -733,16 +734,30 @@ fun HomePageContent(
                         if (!granted) {
                             Toast.makeText(locationContext, "Microphone permission needed", Toast.LENGTH_SHORT).show()
                         } else {
-                            translateMode = !translateMode
-                            if (translateMode) {
-                                listenMode = false
-                                voiceSpeaker.stop()
-                            }
-                            Toast.makeText(
-                                locationContext,
-                                if (translateMode) "Translating - speak either language" else "Translation off",
-                                Toast.LENGTH_SHORT,
-                            ).show()
+                            translateMode = "two-way"
+                            listenMode = false
+                            voiceSpeaker.stop()
+                            Toast.makeText(locationContext, "Two-way: Mandarin ⇄ English", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                ),
+                PageChromeMenuItem(
+                    key = "translate_earpiece",
+                    title = "Translate to English (earpiece)",
+                    onClick = {
+                        if (latestUiState.isConfigMenuVisible) {
+                            latestViewModel.sendIntent(HomeChatIntent.DismissConfigMenu)
+                        }
+                        val granted = locationContext.checkSelfPermission(
+                            Manifest.permission.RECORD_AUDIO,
+                        ) == PackageManager.PERMISSION_GRANTED
+                        if (!granted) {
+                            Toast.makeText(locationContext, "Microphone permission needed", Toast.LENGTH_SHORT).show()
+                        } else {
+                            translateMode = "to-english"
+                            listenMode = false
+                            voiceSpeaker.stop()
+                            Toast.makeText(locationContext, "Chinese → English in your earphones", Toast.LENGTH_SHORT).show()
                         }
                     },
                 ),
@@ -892,7 +907,7 @@ fun HomePageContent(
         onPillTap = {
             com.niki914.zafiro.app.audio.VoiceOutbox.stop()
             when {
-                translateMode -> translateMode = false   // 口译：点药丸即关
+                translateMode != null -> translateMode = null   // 翻译：点药丸即关
                 else -> listenMode = !listenMode
             }
         },
