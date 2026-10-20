@@ -42,9 +42,13 @@ class CallModeController(
         ListenBus.setMuted(false)
         ListenBus.onSentence = { text ->
             when {
-                // 外放 + 落在播报时间窗内：这段一定是喇叭的回声，按时间戳丢弃
-                !audioOnHeadset() && insidePlaybackWindow(System.currentTimeMillis()) ->
-                    log("dropped by time window: " + text.take(40))
+                // 外放 + 落在播报时间窗内：这段一定是喇叭的回声，按时间戳丢弃。
+                // 窗口有两个来源：app 自己的播报（micOff/micOn）和 py 播报工具
+                // （它写 filesDir/speech_window.txt，因为那条路径没有经过 micOff/micOn）。
+                !audioOnHeadset() && (
+                    insidePlaybackWindow(System.currentTimeMillis()) ||
+                        insideToolWindow(System.currentTimeMillis())
+                    ) -> log("dropped by time window: " + text.take(40))
                 // 正在播报时，麦克风听到的多半是我自己；外放没有打断功能，直接丢弃
                 VoiceOutbox.isBusy() -> log("dropped while speaking: " + text.take(40))
                 echoLikely(text) -> log("dropped as echo: " + text.take(40))
@@ -95,6 +99,23 @@ class CallModeController(
         ListenBus.setMuted(false)
         log("playback window closed (+" + TAIL_PAD_MS + "ms tail)")
     }
+
+
+    /**
+     * py 播报工具留下的时间窗：内容 "startMs endMs"（endMs=0 表示仍在播）。
+     * 没有这一条，工具说的每句话都会被麦克风听回来当成用户发言 —— 实测 20:11:31 就是这样。
+     */
+    private fun insideToolWindow(now: Long): Boolean = runCatching {
+        val f = java.io.File(context.filesDir, "speech_window.txt")
+        if (!f.isFile) return@runCatching false
+        val parts = f.readText().trim().split(Regex("\\s+"))
+        if (parts.size < 2) return@runCatching false
+        val start = parts[0].toLongOrNull() ?: return@runCatching false
+        val end = parts[1].toLongOrNull() ?: 0L
+        if (now < start - LEAD_PAD_MS) return@runCatching false
+        if (end == 0L) return@runCatching (now - start) < 120_000L
+        return@runCatching now <= end + TAIL_PAD_MS
+    }.getOrDefault(false)
 
     /** 当前时刻是否落在「我正在说话」的时间窗里（含前后余量）。 */
     private fun insidePlaybackWindow(now: Long): Boolean {

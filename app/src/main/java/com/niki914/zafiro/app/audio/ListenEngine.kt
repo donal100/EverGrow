@@ -33,6 +33,22 @@ class ListenEngine(
 ) {
 
     private val main = Handler(Looper.getMainLooper())
+
+    /**
+     * 看门狗：active 为真却没有会话，就重新开一条。
+     * 实测切前后台回来后可能一条 session open 都没有（日志里 20:12:14 onResume 之后
+     * 直到 20:14 全是空的），此时没有任何人会发现它已经聋了。
+     */
+    private val watchdog = object : Runnable {
+        override fun run() {
+            if (!active) return
+            if (recognizer == null && !opening) {
+                log("watchdog: no session, reopening")
+                openSession()
+            }
+            main.postDelayed(this, 8_000)
+        }
+    }
     private val recorder = UtteranceRecorder(context.filesDir)
     private val queue = ArrayBlockingQueue<ByteArray>(64)
 
@@ -71,6 +87,7 @@ class ListenEngine(
         recorder.start()
         startWriter()
         main.post { openSession() }
+        main.postDelayed(watchdog, 8_000)
     }
 
     fun stop() {
@@ -80,6 +97,7 @@ class ListenEngine(
         writer?.interrupt()
         writer = null
         queue.clear()
+        main.removeCallbacks(watchdog)
         main.post { closeSession() }
     }
 
