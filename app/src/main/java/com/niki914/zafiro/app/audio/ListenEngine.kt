@@ -207,7 +207,8 @@ class ListenEngine(
                 preferOnDevice = false
                 log("on-device cannot do this language, falling back to network recogniser")
             }
-            val delay = (600L shl (consecutiveErrors - 1).coerceIn(0, 4)).coerceAtMost(8_000L)
+            // 下限 1.2 秒：error=5/11 都是「上一个会话还没收尾」，催得越急越糟
+            val delay = (1_200L shl (consecutiveErrors - 1).coerceIn(0, 3)).coerceAtMost(9_000L)
             if (active) main.postDelayed({ if (active) openSession() }, delay)
         }
 
@@ -230,7 +231,9 @@ class ListenEngine(
             }
             // 关键：一条会话只交付一句话，随后就自己关掉了。
             // 之前没有重开，于是「第二句永远听不到」——日志里只有第一次的 session open。
-            if (active) main.postDelayed({ if (active) openSession() }, 350)
+            // 350ms 太急：实测紧接着重开会让新会话报 error=5（client），
+            // 因为老会话的 cancel/destroy 还没走完。给 1.2 秒。
+            if (active) main.postDelayed({ if (active) openSession() }, 1_200)
         }
 
         private fun first(b: Bundle?): String = runCatching {
