@@ -197,8 +197,14 @@ class Compactor(
             return false
         }
 
-        if (summaryResult.isBlank()) {
-            Logger.w(LOG_TAG, "compaction generator returned empty summary, aborting")
+        // 模型摘要为空时不能放弃：实测每一轮都是空摘要，于是历史一直涨到 76 万 token。
+        // 用一个确定性的抽取式摘要兜底：把旧对话按「谁说了什么」压成条目，宁粗勿丢。
+        val effectiveSummary = summaryResult.ifBlank {
+            Logger.w(LOG_TAG, "summary generator returned blank, using extractive fallback")
+            extractiveSummary(history)
+        }
+        if (effectiveSummary.isBlank()) {
+            Logger.w(LOG_TAG, "compaction produced no usable summary, aborting")
             return false
         }
 
@@ -206,7 +212,7 @@ class Compactor(
         currentCoroutineContext().ensureActive()
 
         // 组装 SummaryBlock 节点并挂入树
-        val payload = SummaryBlock.Payload(keepTurns = keepTurns, summary = summaryResult.trim())
+        val payload = SummaryBlock.Payload(keepTurns = keepTurns, summary = effectiveSummary.trim())
         val blockText = SummaryBlock.block(payload)
         val checkpointMessage = Message.User(listOf(ContentBlock.Text(blockText)))
 
