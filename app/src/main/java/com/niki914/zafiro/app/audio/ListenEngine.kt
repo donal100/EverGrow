@@ -63,7 +63,7 @@ class ListenEngine(
     @Volatile var muted = false
 
     /** 端上识别器是否还能用：报 12/13（语言不支持/不可用）后就永久退回网络识别器。 */
-    @Volatile private var preferOnDevice = false
+    @Volatile private var preferOnDevice = true
     /** 连续失败次数，用来做退避：0.6s 起翻倍，最长 8s。 */
     @Volatile private var consecutiveErrors = 0
 
@@ -258,18 +258,18 @@ class ListenEngine(
             File(context.filesDir, "voice_tuning.txt").readText()
         }.getOrDefault("")
         val line = raw.lineSequence().firstOrNull { it.trim().startsWith("listen_lang=") }
-            ?: return "en-US"
+            ?: return ""
         val v = line.substringAfter("=").trim()
         if (v == "auto") return ""
         return v
     }
 
 
-    /** 端上识别器默认关闭：这台机器上它报 error=13，网络识别器才是能用的那条。 */
+    /** 端上识别器默认开启（昨天就是这么跑通的）；要退回网络识别器就写 listen_ondevice=0。 */
     private fun onDeviceEnabled(): Boolean = runCatching {
-        File(context.filesDir, "voice_tuning.txt").readText()
-            .lineSequence().any { it.trim() == "listen_ondevice=1" }
-    }.getOrDefault(false)
+        val raw = File(context.filesDir, "voice_tuning.txt").readText()
+        !raw.lineSequence().any { it.trim() == "listen_ondevice=0" }
+    }.getOrDefault(true)
 
     private fun log(msg: String) {
         runCatching {
