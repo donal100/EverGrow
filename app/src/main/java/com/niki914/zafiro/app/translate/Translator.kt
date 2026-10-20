@@ -3,12 +3,14 @@ package com.niki914.zafiro.app.translate
 import android.content.Context
 import com.niki914.logging.Logger
 import android.util.Base64
+import com.niki914.zafiro.app.audio.CantoneseSpeaker
 import com.niki914.zafiro.app.audio.QwenAsrClient
 import com.niki914.zafiro.app.audio.VoiceReplySpeaker
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -48,6 +50,7 @@ object Translator {
     @Volatile private var speaker: VoiceReplySpeaker? = null
     @Volatile private var busy = false
     @Volatile private var realtime: RealtimeTranslator? = null
+    @Volatile private var cantoneseSpeaker: CantoneseSpeaker? = null
 
     /** 每次 startRealtime 递增；旧的 socket 回调据此丢弃，避免覆盖新会话状态。 */
     @Volatile private var generation = 0
@@ -119,10 +122,12 @@ object Translator {
         //   双人（two-way / two-way-yue）出声 —— 面对面说话时没人愿意盯着屏幕读，
         //     粤语尤其如此，听到才是那个味道；回声问题靠 half-duplex + 播放队列排空解决。
         //   单人（to-english / yue-en）出字幕 —— 讲座/看片时只需要文字。
-        val textOnly = !twoWay
-        // 粤语音色是 Qwen 单独提供的（Rocky 粤语-阿强 / Kiki 粤语-阿清）；
-        // 用普通话音色念粤字，听得出来是硬念 —— 实测用户直接否掉。
-        val voice = if (mode == "two-way-yue") "Rocky" else "Serena"
+        // 粤语：实时会话的音色表里根本没有粤语音色（传 Rocky 会被拒：
+        //   Unsupported voice: 'Rocky'. Supported voices: longanqian, ...
+        // ），所以粤语改成「会话只要文字 + 本地用 Rocky 合成播放」。
+        val cantonese = mode == "two-way-yue"
+        val textOnly = !twoWay || cantonese
+        val voice = "Serena"
         Logger.i(LOG_TAG, "startRealtime mode=" + mode + " route=" + routing + " textOnly=" + textOnly + " voice=" + voice)
         realtime = RealtimeTranslator(
             app,
@@ -133,6 +138,17 @@ object Translator {
             onTranscript = { text ->
                 lastTranslated = text
                 Logger.i(LOG_TAG, "translated: " + text.take(80))
+                if (cantonese) {
+                    val g = gen
+                    scope.launch {
+                        setMuted(true)
+                        try {
+                            speakCantoneseMode(app, text)
+                        } finally {
+                            if (g == generation) setMuted(false)
+                        }
+                    }
+                }
             },
             // 旧 socket 的回调会晚到（stop() 里的 close(1000) 就是典型），把新会话的 "ready"
             // 覆盖成 "closed 1000"，看上去就像根本没开起来。只认当前这一代。
@@ -143,6 +159,23 @@ object Translator {
                 }
             },
         ).also { it.start() }
+    }
+
+    /** 粤语话音（汉字）走 Rocky，英文照常用 Qwen 的英语音色。 */
+    private suspend fun speakCantoneseMode(app: Context, text: String) {
+        val hasHan = text.any { it.code in 0x3400..0x4DBF || it.code in 0x4E00..0x9FFF }
+        if (hasHan) {
+            val speaker = cantoneseSpeaker ?: CantoneseSpeaker(app).also { cantoneseSpeaker = it }
+            withContext(Dispatchers.IO) { speaker.speak(text) }
+        } else {
+            val sp = speaker ?: VoiceReplySpeaker(app).also { speaker = it }
+            sp.submit(text)
+            sp.awaitIdle()
+        }
+    }
+
+    fun setMuted(value: Boolean) {
+        realtime?.muted = value
     }
 
     fun stopRealtime() {

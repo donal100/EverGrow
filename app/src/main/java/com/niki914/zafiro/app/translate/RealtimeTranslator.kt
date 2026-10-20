@@ -56,6 +56,8 @@ class RealtimeTranslator(
     @Volatile private var running = false
     /** 服务器正在返回译文：外放模式下这期间不送麦克风音频。 */
     @Volatile private var speaking = false
+    /** 本地播报期间把麦克风掐掉，别把自己念的声音再送上去（粤语走本地合成时会用到）。 */
+    @Volatile var muted: Boolean = false
     /** 服务端说完一句了，但 AudioTrack 里可能还在排队 —— 播放完之前不能重新开麦。 */
     @Volatile private var responseDone = false
     private var audioBytes = 0L
@@ -179,6 +181,7 @@ class RealtimeTranslator(
             while (running) {
                 val n = runCatching { rec.read(buf, 0, buf.size) }.getOrDefault(-1)
                 if (n <= 0) continue
+                if (muted) continue
                 if (halfDuplex && !textOnly && speaking) continue
                 val bytes = ByteArray(n * 2)
                 var p = 0
