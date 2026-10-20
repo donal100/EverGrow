@@ -513,17 +513,19 @@ fun HomePageContent(
             latestViewModel.sendIntent(HomeChatIntent.Send)
         }
     }
-    // 播报「唯一归属」：listen 模式 或 「Voice replies: on」都算 app 自己念。
-    // 之前只覆盖 listen，voiceMode 打开时 app 念、工具也念，同一句听两遍（实测重叠）。
+    // 播报只有一个归属：agent 自己（py_speak_qwen）。
+    // app 侧的 VoiceOutbox 一律不念 —— 两套系统各自判断「该不该我说话」，
+    // 结果就是重叠、抢麦、以及那次「app 以为工具会念、工具没念」的静音。
+    // 关掉一边，问题就从「协调」变成「不存在」。
     LaunchedEffect(listenMode, uiState.voiceMode) {
         val outbox = com.niki914.zafiro.app.audio.VoiceOutbox
         outbox.attach(voiceContext)
-        outbox.enabled = listenMode || uiState.voiceMode
+        outbox.enabled = false
         outbox.beginTurn()
         Logger.i(
             "niki914_zafiro_SpeechOwner",
             "listenMode=" + listenMode + " voiceMode=" + uiState.voiceMode +
-                " outboxEnabled=" + outbox.enabled
+                " outboxEnabled=false (agent owns speech)"
         )
     }
 

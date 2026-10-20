@@ -164,23 +164,8 @@ object VoiceOutbox {
      * 只要它比「用户按下发送」更晚，这一轮的声音就归它，这里闭嘴。
      * —— 之前两边各自判断 enabled，listen/voice 状态一变就都以为自己该说话，同一句听两遍。
      */
-    private fun toolOwnsThisTurn(): Boolean = runCatching {
-        val f = java.io.File(appFilesDir ?: return@runCatching false, "speech_tool_owner.txt")
-        if (!f.isFile) return@runCatching false
-        val ts = f.readText().trim().toLongOrNull() ?: return@runCatching false
-        // 声明必须在 90 秒内，而且必须晚于本轮发送；
-        // 两个条件缺一不可 —— 实测只剩时间条件时，上一轮的声明会让 app 一直不说话
-        // （21:33:52 "skip speak: py tool owns this turn"，结果谁也没出声）。
-        val fresh = System.currentTimeMillis() - ts < 90_000L
-        fresh && ts > sendAt
-    }.getOrDefault(false)
-
     private fun submitSafe(chunk: String) {
         if (chunk.none { it.isLetterOrDigit() }) return
-        if (toolOwnsThisTurn()) {
-            log("skip speak: py tool owns this turn (" + chunk.take(30) + ")")
-            return
-        }
         // 谁在说话必须留痕：外放重叠的两次实测里，一条来自这里、一条来自 py 工具，
         // 但日志只有合成时间，看不出是两个来源。
         log("speak from outbox chars=" + chunk.length + " head=" + chunk.take(40))
@@ -233,9 +218,6 @@ object VoiceOutbox {
 
     /** 新一轮开始：允许把同样的文本再念一次。 */
     fun beginTurn() {
-        runCatching {
-            appFilesDir?.let { java.io.File(it, "speech_tool_owner.txt").delete() }
-        }
         pending.setLength(0)
         lastFull = ""
     }
