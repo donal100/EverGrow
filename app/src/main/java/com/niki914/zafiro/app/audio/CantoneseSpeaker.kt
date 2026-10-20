@@ -93,13 +93,18 @@ class CantoneseSpeaker(private val appContext: Context) {
 
     private fun play(file: File): Boolean {
         val player = MediaPlayer()
+        val done = java.util.concurrent.CountDownLatch(1)
         return try {
             player.setDataSource(file.absolutePath)
             player.prepare()
+            // 之前用 player.duration 当播放时长，实测偶发拿到 44739241 ms（≈12 小时）的
+            // 垃圾值，于是麦克风一睡不醒 —— 症状就是「第一句之后再也听不到我」。
+            // 改成等播放完成回调，最长等 20 秒。
+            player.setOnCompletionListener { done.countDown() }
             player.start()
-            val duration = player.duration.coerceAtLeast(300)
-            Logger.i(TAG, "speaking " + file.length() + " bytes, " + duration + " ms")
-            Thread.sleep(duration.toLong() + 120L)
+            Logger.i(TAG, "speaking " + file.length() + " bytes (duration=" + player.duration + ")")
+            done.await(20, TimeUnit.SECONDS)
+            runCatching { player.stop() }
             player.release()
             true
         } catch (e: Throwable) {

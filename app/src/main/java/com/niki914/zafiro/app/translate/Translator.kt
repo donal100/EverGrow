@@ -9,6 +9,7 @@ import com.niki914.zafiro.app.audio.VoiceReplySpeaker
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -142,6 +143,15 @@ object Translator {
                     val g = gen
                     scope.launch {
                         setMuted(true)
+                        // 看门狗：万一播报卡住，25 秒后强制把麦克风还回去。
+                        // 少了这一道，一次卡住就等于「之后再也听不到我」。
+                        scope.launch {
+                            delay(25_000)
+                            if (g == generation) {
+                                Logger.w(LOG_TAG, "unmute watchdog fired")
+                                setMuted(false)
+                            }
+                        }
                         try {
                             speakCantoneseMode(app, text)
                         } finally {
