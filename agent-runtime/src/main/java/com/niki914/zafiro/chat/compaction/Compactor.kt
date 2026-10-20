@@ -54,6 +54,12 @@ class Compactor(
         const val TOOL_RESULT_MAX_CHARS = 2000
 
         /**
+         * 首屏压缩（还没有检查点、无法重放）时，喂给摘要模型的文本总长上限。
+         * 约 40 万字符 ≈ 12 万 token，离 1M 窗口很远，但足够装下真实进展。
+         */
+        const val MAX_SUMMARY_INPUT_CHARS = 400_000
+
+        /**
          * 判定是否应当触发压缩。
          */
         fun shouldCompact(
@@ -186,18 +192,31 @@ class Compactor(
             if (msg is Message.User) SummaryBlock.strip(textOf(msg)).payload?.summary else null
         }.lastOrNull()
 
-        // 展平对话
-        val conversationText = serializeConversation(history)
-        if (conversationText.isBlank()) return false
+        // 重放边界：只重放「真正会被发出去」的那段前缀，也就是裁剪之后的切片。
+        // 旧实现把 6553 条完整历史重放一遍、instruction 里再塞一份序列化文本，
+        // 同样的内容付了两遍 token（≈76 万），服务端直接拒单（stopReason=Parse），
+        // 摘要于是恒为空，只能吃抽取式兜底 —— 压缩了但等于没压缩。
+        val pruned = ContextPruner.prune(history)
+        val replayMessages = if (pruned.hasCompacted) pruned.messages else emptyList()
 
-        // DeepSeek Harness 的做法：重放真实前缀（同一套 system + 同一条消息序列），
-        // 只把压缩指令作为最后一条 user 消息追加，从而命中 prefix cache。
-        val instruction = CompactorPrompts.buildSummarizationUserPrompt(conversationText, previousSummary)
+        val instruction = if (replayMessages.isNotEmpty()) {
+            // 常规路径：真实消息已重放，只追加指令 -> 前缀与上一轮一致，KV cache 命中。
+            CompactorPrompts.buildSummarizationInstruction(previousSummary)
+        } else {
+            // 首次压缩、尚无检查点：历史太长没法整段重放，退回文本摘要路径，
+            // 并对工具结果截断 + 总长封顶，避免刚修好的窗口又被撑爆。
+            val conversationText = serializeConversation(history)
+            if (conversationText.isBlank()) return false
+            CompactorPrompts.buildSummarizationUserPrompt(
+                conversationText.takeLast(MAX_SUMMARY_INPUT_CHARS),
+                previousSummary,
+            )
+        }
         val systemPrompt = systemPromptProvider()
 
         val summaryResult: String
         try {
-            summaryResult = summaryGenerator.generate(systemPrompt, history, instruction)
+            summaryResult = summaryGenerator.generate(systemPrompt, replayMessages, instruction)
         } catch (e: CancellationException) {
             // 核心不变量：用户取消严禁生吞，不向会话树追加节点（“无事发生”）
             Logger.i(LOG_TAG, "compaction cancelled by user or coroutine, leaving session untouched")

@@ -257,6 +257,10 @@ internal class OkiaSessionAssembler(
         }
         try {
             var summary = ""
+            Logger.i(
+                LOG_TAG,
+                "summary request: replay=${messages.size} instructionChars=${instruction.length}"
+            )
             // 重放历史：失败就退回「只发指令」的旧行为，摘要功能不能因此停摆
             for (msg in messages) {
                 runCatching { session.append(msg) }
@@ -270,6 +274,7 @@ internal class OkiaSessionAssembler(
                         .joinToString("\n") { it.text }
                 }
             }
+            Logger.i(LOG_TAG, "summary done chars=${summary.length}")
             return summary
         } finally {
             session.close()

@@ -97,6 +97,27 @@ Use this EXACT format:
 Keep each section concise. Preserve exact file paths, function names, and error messages."""
 
     /**
+     * 仅指令版本：真实消息已经被原样重放，这里只追加「该做什么」。
+     *
+     * DeepSeek Harness 就是这么做的 —— 前缀与上次请求逐字节一致，KV cache 全命中。
+     * 旧做法把序列化文本再塞进 instruction，等于同样的内容付两次 token，
+     * 6553 条历史下直接把请求撑爆（服务端拒单 -> 摘要恒为空）。
+     */
+    fun buildSummarizationInstruction(previousSummary: String?): String {
+        return if (previousSummary.isNullOrBlank()) {
+            "The messages above are a conversation to summarize.\n\n$SUMMARIZATION_PROMPT"
+        } else {
+            """<previous-summary>
+$previousSummary
+</previous-summary>
+
+The messages above are NEW conversation messages to incorporate into the existing summary provided in <previous-summary> tags.
+
+$UPDATE_SUMMARIZATION_INSTRUCTIONS"""
+        }
+    }
+
+    /**
      * 构建发送给摘要模型的最终用户提示词。
      */
     fun buildSummarizationUserPrompt(conversationText: String, previousSummary: String?): String {
