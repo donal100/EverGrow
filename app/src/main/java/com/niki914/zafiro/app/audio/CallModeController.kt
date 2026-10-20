@@ -16,12 +16,35 @@ class CallModeController(
     @Volatile private var lastSpoken: String = ""
     @Volatile private var lastSpokenAt: Long = 0L
 
+    private companion object {
+        /** 开播到真正出声有几十到几百毫秒延迟，窗口起点往前让一点。 */
+        const val LEAD_PAD_MS = 250L
+        /** 播完的拖尾：播放器收尾 + 房间余响。 */
+        const val TAIL_PAD_MS = 900L
+    }
+
+    /**
+     * 播报时间窗：[playStartAt, playEndAt] 之外才是用户的声音。
+     *
+     * 之前外放时靠「播报开始静音、结束恢复」这套 mute/unmute 状态机挡回声，
+     * 它每卡一次就永久聋掉（实测两次：一次播放结束后 10 秒再也没有音频，
+     * 一次十二小时的 duration 垃圾值把麦克风睡死）。现在麦克风不停，
+     * 只用时间戳把「我说话的那段」对应的转写丢掉 —— 没有状态可卡。
+     */
+    @Volatile private var playStartAt: Long = 0L
+    @Volatile private var playEndAt: Long = 0L
+
     var bargeIn = false
     var onBargeIn: (() -> Boolean)? = null
 
     fun start() {
+        // 上一次会话可能留下静音状态，进来先清掉
+        ListenBus.setMuted(false)
         ListenBus.onSentence = { text ->
             when {
+                // 外放 + 落在播报时间窗内：这段一定是喇叭的回声，按时间戳丢弃
+                !audioOnHeadset() && insidePlaybackWindow(System.currentTimeMillis()) ->
+                    log("dropped by time window: " + text.take(40))
                 // 正在播报时，麦克风听到的多半是我自己；外放没有打断功能，直接丢弃
                 VoiceOutbox.isBusy() -> log("dropped while speaking: " + text.take(40))
                 echoLikely(text) -> log("dropped as echo: " + text.take(40))
@@ -54,21 +77,30 @@ class CallModeController(
 
     /** 播报开始：外放时把麦克风静音，耳机时保持收听（用于打断）。 */
     fun micOff() {
-        // 只有声音真的走扬声器时才静音。
-        // 判断依据是「现在这一刻」的输出状态，而不是「有没有配对过耳机」：
-        // 之前用设备列表判断，蓝牙耳机连着但声音从扬声器出来，就漏掉了。
-        val onSpeaker = !audioOnHeadset()
-        if (onSpeaker) {
-            ListenBus.setMuted(true)
-            log("mic muted (speaking, output=speaker)")
+        // 不再静音：只记下窗口起点。判断依据是「现在这一刻」的输出状态，
+        // 而不是「有没有配对过耳机」—— 蓝牙连着但声音从扬声器出来也算外放。
+        playStartAt = System.currentTimeMillis()
+        playEndAt = 0L
+        ListenBus.setMuted(false)
+        if (audioOnHeadset()) {
+            log("playback window opened (headset) - listening through")
         } else {
-            log("mic live (speaking, output=headset) - barge-in available")
+            log("playback window opened (speaker) - mic stays live, drop by timestamp")
         }
     }
 
-    /** 播报结束：恢复。 */
+    /** 播报结束：关窗，并留一段尾巴把扬声器拖尾也吞掉。 */
     fun micOn() {
+        playEndAt = System.currentTimeMillis() + TAIL_PAD_MS
         ListenBus.setMuted(false)
+        log("playback window closed (+" + TAIL_PAD_MS + "ms tail)")
+    }
+
+    /** 当前时刻是否落在「我正在说话」的时间窗里（含前后余量）。 */
+    private fun insidePlaybackWindow(now: Long): Boolean {
+        if (playStartAt == 0L) return false
+        if (now < playStartAt - LEAD_PAD_MS) return false
+        return playEndAt == 0L || now <= playEndAt
     }
 
     fun pause() = Unit
