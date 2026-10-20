@@ -159,6 +159,9 @@ object VoiceOutbox {
     /** 只发「有字」的内容：纯标点、纯空白一律丢掉（TTS 会 400）。 */
     private fun submitSafe(chunk: String) {
         if (chunk.none { it.isLetterOrDigit() }) return
+        // 谁在说话必须留痕：外放重叠的两次实测里，一条来自这里、一条来自 py 工具，
+        // 但日志只有合成时间，看不出是两个来源。
+        log("speak from outbox chars=" + chunk.length + " head=" + chunk.take(40))
         runCatching { onSpeechStart?.invoke() }
         runCatching { onSpoken?.invoke(chunk) }
         speaker?.submit(chunk)

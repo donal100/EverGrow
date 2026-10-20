@@ -513,10 +513,18 @@ fun HomePageContent(
             latestViewModel.sendIntent(HomeChatIntent.Send)
         }
     }
-    LaunchedEffect(listenMode) {
-        com.niki914.zafiro.app.audio.VoiceOutbox.attach(voiceContext)
-        com.niki914.zafiro.app.audio.VoiceOutbox.enabled = listenMode
-        com.niki914.zafiro.app.audio.VoiceOutbox.beginTurn()
+    // 播报「唯一归属」：listen 模式 或 「Voice replies: on」都算 app 自己念。
+    // 之前只覆盖 listen，voiceMode 打开时 app 念、工具也念，同一句听两遍（实测重叠）。
+    LaunchedEffect(listenMode, uiState.voiceMode) {
+        val outbox = com.niki914.zafiro.app.audio.VoiceOutbox
+        outbox.attach(voiceContext)
+        outbox.enabled = listenMode || uiState.voiceMode
+        outbox.beginTurn()
+        Logger.i(
+            "niki914_zafiro_SpeechOwner",
+            "listenMode=" + listenMode + " voiceMode=" + uiState.voiceMode +
+                " outboxEnabled=" + outbox.enabled
+        )
     }
 
     // 回合结束 -> 把麦克风交还通话模式。

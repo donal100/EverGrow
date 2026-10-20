@@ -23,6 +23,37 @@ import kotlinx.coroutines.runBlocking
 
 // tag:niki914 | tag:nexus-x-log | message:niki914 | message:nexus-x-log
 class MainActivity : AppCompatActivity() {
+
+    /**
+     * 生命周期留痕：外放音重叠、以及「回答完就聋」这两种现象都出现在切前后台之后，
+     * 但日志里根本看不出前后台切换，只能靠猜。这里每次切换写一行 call_mode.log。
+     */
+    private fun logLifecycle(event: String) {
+        runCatching {
+            java.io.File(filesDir, "call_mode.log")
+                .appendText(System.currentTimeMillis().toString() + "  [activity] " + event + "\n")
+        }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        logLifecycle("onStart")
+    }
+
+    override fun onResume() {
+        super.onResume()
+        logLifecycle("onResume")
+    }
+
+    override fun onPause() {
+        logLifecycle("onPause")
+        super.onPause()
+    }
+
+    override fun onStop() {
+        logLifecycle("onStop")
+        super.onStop()
+    }
     private fun applyLanguageTag(tag: String) {
         // 始终显式设置：空 tag = 清除应用内语言，回落系统；否则用户指定优先
         AppCompatDelegate.setApplicationLocales(
