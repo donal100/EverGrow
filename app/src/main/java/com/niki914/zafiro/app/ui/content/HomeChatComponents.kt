@@ -517,6 +517,8 @@ fun LiquidChatComposer(
     onInterruptSpeech: () -> Unit = {},
     /** 通话模式是否正在听：药丸改成醒目的「Listening」，不用翻菜单也知道状态。 */
     listenMode: Boolean = false,
+    /** 翻译模式是否在跑：药丸改成 Translate，颜色区分开。 */
+    translateMode: Boolean = false,
     /** 点药丸：听的时候关掉通话模式，不听的时候切换「念回复」。 */
     onToggleListenMode: () -> Unit = {},
     /** agent 正在播报。此时点药丸只是「别说了」，不该顺手关掉通话模式。 */
