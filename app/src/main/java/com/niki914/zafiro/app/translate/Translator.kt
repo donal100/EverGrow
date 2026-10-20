@@ -95,7 +95,7 @@ object Translator {
         appCtx = app
         direction = mode
         // 双向走外放（两个人都要听见），单向走耳机
-        val twoWay = mode == "two-way"
+        val twoWay = mode == "two-way" || mode == "two-way-yue"
         routing = if (twoWay) "speaker" else AudioRouter.routeToEarphones(app)
         val instructions = when (mode) {
             "to-chinese" ->
@@ -106,15 +106,18 @@ object Translator {
                 "You are a Cantonese-to-English interpreter. Whatever you hear, translate it into natural English and output English text only. " +
                 "The speaker may mix in English words or switch languages mid-sentence: still translate the whole utterance into English, keeping names and technical terms as they are."
             "two-way" ->
-                "You are a two-way interpreter between two people. If you hear Chinese, translate it into English. If you hear English, translate it into Simplified Chinese. Speak only the translation, briefly and naturally."
+                "You are a two-way interpreter between two people, Mandarin and English. If you hear Mandarin, output natural English. If you hear English, output Simplified Chinese. Output the translation only, briefly and naturally, with no commentary."
+            "two-way-yue" ->
+                "You are a two-way interpreter between two people, Cantonese and English. If you hear Cantonese, output natural English. If you hear English, output colloquial written Cantonese as used in Hong Kong messaging - not Standard Written Chinese. Output the translation only, briefly and naturally, with no commentary."
             else ->
                 "You are a Mandarin-to-English interpreter. Whatever you hear, translate it into natural English and output English text only. " +
                 "Ignore filler and false starts; keep names and technical terms as they are."
         }
         state = "connecting"
         val gen = ++generation
-        // 单人模式（to-english / to-chinese）只要字幕：文字比语音稳，也不会跟你说话抢麦。
-        val textOnly = !twoWay
+        // 全部模式都出文字：音频回音频要跟手机自己的喇叭抢麦克风，太脆；
+        // 字幕对两个人也够用 —— 谁说话谁把屏幕转过去。
+        val textOnly = true
         Logger.i(LOG_TAG, "startRealtime mode=" + mode + " route=" + routing + " textOnly=" + textOnly)
         realtime = RealtimeTranslator(
             app,

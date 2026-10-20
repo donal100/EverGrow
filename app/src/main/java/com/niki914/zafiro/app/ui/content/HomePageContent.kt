@@ -618,7 +618,7 @@ fun HomePageContent(
     // 字幕只在单人模式跑：双向模式仍然出声，不需要屏幕上的文字。
     LaunchedEffect(translateMode) {
         val mode = translateMode
-        if (mode == null || mode == "two-way") {
+        if (mode == null) {
             translateCaption = ""
             return@LaunchedEffect
         }
@@ -743,7 +743,7 @@ fun HomePageContent(
                 ),
                 PageChromeMenuItem(
                     key = "translate_dialogue",
-                    title = "Translate: two people",
+                    title = "Two people: English ⇄ Mandarin (subtitles)",
                     onClick = {
                         if (latestUiState.isConfigMenuVisible) {
                             latestViewModel.sendIntent(HomeChatIntent.DismissConfigMenu)
@@ -758,7 +758,28 @@ fun HomePageContent(
                             translateMode = "two-way"
                             listenMode = false
                             voiceSpeaker.stop()
-                            Toast.makeText(locationContext, "Two-way: Mandarin ⇄ English", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(locationContext, "Two people: English ⇄ Mandarin", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                ),
+                PageChromeMenuItem(
+                    key = "translate_dialogue_yue",
+                    title = "Two people: English ⇄ Cantonese (subtitles)",
+                    onClick = {
+                        if (latestUiState.isConfigMenuVisible) {
+                            latestViewModel.sendIntent(HomeChatIntent.DismissConfigMenu)
+                        }
+                        val granted = locationContext.checkSelfPermission(
+                            Manifest.permission.RECORD_AUDIO,
+                        ) == PackageManager.PERMISSION_GRANTED
+                        if (!granted) {
+                            Toast.makeText(locationContext, "Microphone permission needed", Toast.LENGTH_SHORT).show()
+                        } else {
+                            Logger.i("niki914_zafiro_TranslateUi", "menu pick: two-way-yue")
+                            translateMode = "two-way-yue"
+                            listenMode = false
+                            voiceSpeaker.stop()
+                            Toast.makeText(locationContext, "Two people: English ⇄ Cantonese", Toast.LENGTH_SHORT).show()
                         }
                     },
                 ),
