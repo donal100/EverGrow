@@ -244,7 +244,7 @@ class Compactor(
                     if (t.isNotEmpty()) lines.add("- user: " + t.take(160))
                 }
                 is Message.Assistant -> {
-                    val t = msg.content.filterIsInstance<ContentBlock.Text>()
+                    val t = msg.message.content.filterIsInstance<ContentBlock.Text>()
                         .joinToString(" ") { it.text }
                         .replace(Regex("\\s+"), " ").trim()
                     if (t.isNotEmpty()) lines.add("- assistant: " + t.take(160))
