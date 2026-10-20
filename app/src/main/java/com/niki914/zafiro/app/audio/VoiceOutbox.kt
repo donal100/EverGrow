@@ -102,6 +102,11 @@ object VoiceOutbox {
     fun onAssistantText(fullText: String) {
         val clean = fullText.trim()
         if (clean.isEmpty()) return
+        // 计时放在「语音是否开启」之前：关掉朗读时也要能量出首字延迟
+        if (!firstTextLogged) {
+            firstTextLogged = true
+            if (sendAt > 0) log("first text " + (System.currentTimeMillis() - sendAt) + "ms after send")
+        }
         if (!enabled) {
             lastFull = clean
             return
@@ -111,10 +116,6 @@ object VoiceOutbox {
             clean == previous -> return
             clean.startsWith(previous) -> clean.substring(previous.length)
             else -> clean          // 文本被替换（短回答常见）
-        }
-        if (!firstTextLogged) {
-            firstTextLogged = true
-            if (sendAt > 0) log("first text " + (System.currentTimeMillis() - sendAt) + "ms after send")
         }
         lastFull = clean
         pending.append(fresh)
