@@ -62,6 +62,7 @@ class App : Application() {
     override fun onCreate() {
         super.onCreate()
         installLifecycleLog()
+        com.niki914.zafiro.repo.SharedHttp.attachLog(filesDir)
         CrashRecorder.install(this)
         // 日志 debug 门控：release 构建 DEBUG/VERBOSE 全停，仅 INFO+ 输出
         Logger.setDebugProvider { BuildConfig.DEBUG }
