@@ -699,9 +699,18 @@ fun LiquidChatComposer(
         // 只有一个开关：听/不听。开着就意味着「会听我说话，也会念回答」。
         // 之前这里是「Speak / Listening」两套语义塞进一个按钮，颜色还各表一义，
         // 用户（和我）都猜不准下一次点击会发生什么。
-        val on = listenMode
-        val bg = if (on) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.surfaceVariant
-        val fg = if (on) MaterialTheme.colorScheme.onError else MaterialTheme.colorScheme.onSurfaceVariant
+        // 三态：关 / 听写 / 翻译。同一个按钮循环切换，颜色区分谁在用麦克风。
+        val on = listenMode || translateMode
+        val bg = when {
+            listenMode -> MaterialTheme.colorScheme.error
+            translateMode -> MaterialTheme.colorScheme.tertiary
+            else -> MaterialTheme.colorScheme.surfaceVariant
+        }
+        val fg = when {
+            listenMode -> MaterialTheme.colorScheme.onError
+            translateMode -> MaterialTheme.colorScheme.onTertiary
+            else -> MaterialTheme.colorScheme.onSurfaceVariant
+        }
         Row(
             modifier = Modifier
                 .offset(x = (-4).dp)
@@ -714,12 +723,20 @@ fun LiquidChatComposer(
         ) {
             Icon(
                 imageVector = Icons.Default.GraphicEq,
-                contentDescription = if (on) "Listening on" else "Listening off",
+                contentDescription = when {
+                    listenMode -> "Listening on"
+                    translateMode -> "Translating"
+                    else -> "Listening off"
+                },
                 tint = fg,
                 modifier = Modifier.size(18.dp),
             )
             Text(
-                text = if (on) "Listening" else "Listen",
+                text = when {
+                    listenMode -> "Listening"
+                    translateMode -> "Translate"
+                    else -> "Listen"
+                },
                 color = fg,
                 style = MaterialTheme.typography.labelLarge,
             )

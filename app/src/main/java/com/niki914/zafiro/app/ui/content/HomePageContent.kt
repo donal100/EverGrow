@@ -460,6 +460,7 @@ fun HomePageContent(
     // —— 通话模式（Listen mode）：像打电话一样一直听着 ——
     // 用户说完一句 -> 走正常发消息链路 -> agent 回复 -> 念出来 -> 继续听。
     var listenMode by listenModeState
+    var translateMode by remember { mutableStateOf(false) }
     var pendingUtterance by remember { mutableStateOf<String?>(null) }
     val latestListenMode by rememberUpdatedState(listenMode)
     val callModeController = remember {
@@ -593,6 +594,19 @@ fun HomePageContent(
         voiceSpeaker.note("barge-in=" + callModeController.bargeIn)
     }
 
+    // —— 实时翻译 ——
+    // 菜单负责开，药丸负责关：口译开着的时候药丸显示 Translate，点一下关掉。
+    LaunchedEffect(translateMode) {
+        val tr = com.niki914.zafiro.app.translate.Translator
+        if (translateMode) {
+            callModeController.stop()
+            listenMode = false
+            tr.startRealtime(voiceContext, "two-way")
+        } else {
+            tr.stop()
+        }
+    }
+
     LaunchedEffect(listenMode) {
         if (listenMode) callModeController.start() else callModeController.stop()
 
@@ -703,6 +717,33 @@ fun HomePageContent(
                             latestViewModel.sendIntent(HomeChatIntent.DismissConfigMenu)
                         }
                         latestViewModel.sendIntent(HomeChatIntent.ToggleVoiceMode)
+                    },
+                ),
+                PageChromeMenuItem(
+                    key = "translate_mode",
+                    // 口译由菜单开启，药丸负责关闭（药丸会变成 Translate）。
+                    title = "Real-time translate",
+                    onClick = {
+                        if (latestUiState.isConfigMenuVisible) {
+                            latestViewModel.sendIntent(HomeChatIntent.DismissConfigMenu)
+                        }
+                        val granted = locationContext.checkSelfPermission(
+                            Manifest.permission.RECORD_AUDIO,
+                        ) == PackageManager.PERMISSION_GRANTED
+                        if (!granted) {
+                            Toast.makeText(locationContext, "Microphone permission needed", Toast.LENGTH_SHORT).show()
+                        } else {
+                            translateMode = !translateMode
+                            if (translateMode) {
+                                listenMode = false
+                                voiceSpeaker.stop()
+                            }
+                            Toast.makeText(
+                                locationContext,
+                                if (translateMode) "Translating - speak either language" else "Translation off",
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                        }
                     },
                 ),
                 PageChromeMenuItem(
@@ -850,7 +891,10 @@ fun HomePageContent(
         // 不做「先停播再关麦」的花样 —— 用户要的是确定的行为。
         onPillTap = {
             com.niki914.zafiro.app.audio.VoiceOutbox.stop()
-            listenMode = !listenMode
+            when {
+                translateMode -> translateMode = false   // 口译：点药丸即关
+                else -> listenMode = !listenMode
+            }
         },
         onToggleListenMode = {
             val next = !listenMode
