@@ -46,6 +46,11 @@ class ListenEngine(
     /** 播报期间静音：不把样本送进识别器（外放时这是最干净的做法）。 */
     @Volatile var muted = false
 
+    /** 端上识别器是否还能用：报 12/13（语言不支持/不可用）后就永久退回网络识别器。 */
+    @Volatile private var preferOnDevice = true
+    /** 连续失败次数，用来做退避：0.6s 起翻倍，最长 8s。 */
+    @Volatile private var consecutiveErrors = 0
+
     @Volatile private var active = false
     @Volatile private var out: FileOutputStream? = null
     private var recognizer: SpeechRecognizer? = null
@@ -128,7 +133,8 @@ class ListenEngine(
             // 优先用「端上识别器」：实测网络识别器会连续 error=11（server disconnected）
             // 和 error=7（network），会话就这么断掉，听感上就是「它又不理我了」。
             // 端上模型不依赖网络，台词一样（Google 的 en-US/中文模型都在本机）。
-            val onDevice = android.os.Build.VERSION.SDK_INT >= 31 &&
+            val onDevice = preferOnDevice &&
+                android.os.Build.VERSION.SDK_INT >= 31 &&
                 runCatching { SpeechRecognizer.isOnDeviceRecognitionAvailable(context) }.getOrDefault(false)
             val r = if (onDevice) {
                 SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
@@ -165,9 +171,24 @@ class ListenEngine(
         override fun onEvent(eventType: Int, params: Bundle?) {}
 
         override fun onError(error: Int) {
-            log("error=" + error)
-            // 任何错误都只做一件事：重开一条会话。没有别的分支。
-            if (active) main.postDelayed({ if (active) openSession() }, 600)
+            // 错误码写成人话：不写的话日志里只有数字，得靠猜
+            val name = when (error) {
+                1 -> "network_timeout"; 2 -> "network"; 3 -> "audio"; 4 -> "server"
+                5 -> "client"; 6 -> "speech_timeout"; 7 -> "no_match"; 8 -> "busy"
+                9 -> "no_permission"; 10 -> "too_many_requests"; 11 -> "server_disconnected"
+                12 -> "language_not_supported"; 13 -> "language_unavailable"
+                else -> "unknown"
+            }
+            consecutiveErrors++
+            log("error=" + error + " (" + name + ") retry=" + consecutiveErrors +
+                " onDevice=" + preferOnDevice)
+            // 端上模型不支持这个语言时，硬撑只会一直重开：永久退回网络识别器
+            if (preferOnDevice && (error == 12 || error == 13)) {
+                preferOnDevice = false
+                log("on-device cannot do this language, falling back to network recogniser")
+            }
+            val delay = (600L shl (consecutiveErrors - 1).coerceIn(0, 4)).coerceAtMost(8_000L)
+            if (active) main.postDelayed({ if (active) openSession() }, delay)
         }
 
         override fun onPartialResults(partialResults: Bundle?) {
@@ -182,6 +203,7 @@ class ListenEngine(
             // 拿它当「用户在说话」会把回答掐掉（实测一个 "here" 就停了）。
             if (t.length >= 3) runCatching { onSpeechStart?.invoke(t) }
             if (t.length >= 2 && t != lastFinal) {
+                consecutiveErrors = 0
                 lastFinal = t
                 log("sentence: " + t.take(70))
                 onSentence(t)
