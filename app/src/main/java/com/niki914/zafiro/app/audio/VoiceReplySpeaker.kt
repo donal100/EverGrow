@@ -80,6 +80,7 @@ class VoiceReplySpeaker(private val appContext: Context) {
      */
     @Volatile
     private var cancelled = false
+    private var loggedFirst = false
 
     /**
      * 流水线播放用的队列。为什么要流水线：流式播报是按句合成的，如果「念完一句再去合成下一句」，
@@ -203,6 +204,7 @@ class VoiceReplySpeaker(private val appContext: Context) {
      */
     private fun streamAndPlay(rawText: String): Boolean {
         if (cancelled) return true
+        val t0 = System.currentTimeMillis()
         // 先把数字/时间/单位展开成英文单词，否则多语种音色会把 "0.96 km" 念成别的东西
         val text = SpokenForm.of(rawText)
         if (text.length <= 12) return false
@@ -245,6 +247,10 @@ class VoiceReplySpeaker(private val appContext: Context) {
                     val bytes = Base64.decode(audio, Base64.DEFAULT)
                     if (bytes.isEmpty()) continue
                     pcm.write(squeezeSilence(bytes))
+                    if (!loggedFirst) {
+                        loggedFirst = true
+                        log("first audio after " + (System.currentTimeMillis() - t0) + "ms")
+                    }
                     chunks++
                     val now = System.currentTimeMillis()
                     if (lastChunkAt > 0) {

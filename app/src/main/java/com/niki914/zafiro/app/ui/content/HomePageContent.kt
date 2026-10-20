@@ -918,6 +918,7 @@ fun HomePageContent(
             listenMode = next
         },
         onSendClick = {
+            com.niki914.zafiro.app.audio.VoiceOutbox.markSend()
             val query = uiState.input.trim()
             val hasAttachments =
                 uiState.pendingImages.isNotEmpty() || uiState.pendingFiles.isNotEmpty()
@@ -1242,7 +1243,6 @@ private fun HomePageContentBody(
     onToggleVoiceMode: () -> Unit = {},
     onInterruptSpeech: () -> Unit = {},
     listenMode: Boolean = false,
-    translateMode: Boolean = false,
     onToggleListenMode: () -> Unit = {},
     agentSpeaking: Boolean = false,
     onPillTap: () -> Unit = {},
@@ -1428,7 +1428,6 @@ private fun HomePageContentBody(
                 onToggleVoiceMode = onToggleVoiceMode,
                 onInterruptSpeech = onInterruptSpeech,
                 listenMode = listenMode,
-                translateMode = translateMode,
                 onToggleListenMode = onToggleListenMode,
                 agentSpeaking = agentSpeaking,
                 onPillTap = onPillTap,

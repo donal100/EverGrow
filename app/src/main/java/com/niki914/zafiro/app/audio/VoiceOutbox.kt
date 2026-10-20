@@ -25,6 +25,25 @@ object VoiceOutbox {
     @Volatile
     var enabled: Boolean = false
 
+    /** 计时：用户按下发送的时刻，用来量「发送 → 首字」这一段。 */
+    private var sendAt = 0L
+    private var firstTextLogged = false
+
+    /** 用户发出消息时调用。 */
+    fun markSend() {
+        sendAt = System.currentTimeMillis()
+        firstTextLogged = false
+        log("send")
+    }
+
+    private fun log(msg: String) {
+        runCatching {
+            val f = java.io.File(tuningPath ?: return@runCatching)
+            val g = java.io.File(f.parentFile, "voice_debug.log")
+            g.appendText(System.currentTimeMillis().toString() + "  " + msg + "\n")
+        }
+    }
+
     /** 上一次已经交给 TTS 的全文，用来算增量。 */
     private var lastFull: String = ""
 
@@ -92,6 +111,10 @@ object VoiceOutbox {
             clean == previous -> return
             clean.startsWith(previous) -> clean.substring(previous.length)
             else -> clean          // 文本被替换（短回答常见）
+        }
+        if (!firstTextLogged) {
+            firstTextLogged = true
+            if (sendAt > 0) log("first text " + (System.currentTimeMillis() - sendAt) + "ms after send")
         }
         lastFull = clean
         pending.append(fresh)
