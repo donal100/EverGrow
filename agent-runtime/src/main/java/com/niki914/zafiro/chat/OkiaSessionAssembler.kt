@@ -280,6 +280,9 @@ internal class OkiaSessionAssembler(
             model = config.model
             idleTimeoutSeconds = config.idleTimeoutSeconds ?: AgentSessionEngine.NO_IDLE_TIMEOUT_SECONDS
             retryPolicy = RetryPolicy(maxAttempts = config.retryMaxAttempts)
+            // 重放的历史里可能带没有结果的 tool call（中断的回合），Responses API 会 400：
+            // "No tool output found for tool call ..." —— 主会话靠这个 hook 补齐，摘要会话也要。
+            hooks += fixIncompleteToolCallsHook
             maxTokens = config.maxTokens
             thinkingLevel = config.thinkingLevel
             proxy = config.proxy
