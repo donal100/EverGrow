@@ -18,7 +18,6 @@ import com.niki914.zafiro.business.notification.NotificationChannelManagerImpl
 import com.niki914.zafiro.business.permission.PermissionManager
 import com.niki914.zafiro.business.permission.PermissionManagerImpl
 import com.niki914.zafiro.mcp.service.McpServiceImpl
-import com.niki914.zafiro.mod.feat.ZafiroAccessibilityService
 import com.niki914.zafiro.repo.XRepo
 import com.niki914.zafiro.repo.XSettingsImpl
 import com.niki914.zafiro.service.installService
@@ -54,7 +53,6 @@ object AppServices {
         // 无障碍组件名只能由 app 侧给出：类名不随 applicationId（`.debug` 后缀）改变
         installService<PermissionManager>(
             PermissionManagerImpl(
-                ComponentName(application, ZafiroAccessibilityService::class.java),
             )
         )
         // 附件落地（SAF uri → 真实路径 + 全局文件访问权）：自持 PermissionManager，零构造参数
