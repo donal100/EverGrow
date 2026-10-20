@@ -34,7 +34,13 @@ internal object SharedHttp {
     }
 
     private val netLogger = object : EventListener() {
-        override fun connectFailed(call: Call, inetSocketAddress: InetSocketAddress, protocol: okhttp3.Protocol, ioe: java.io.IOException) {
+        override fun connectFailed(
+            call: Call,
+            inetSocketAddress: InetSocketAddress,
+            proxy: java.net.Proxy,
+            protocol: okhttp3.Protocol?,
+            ioe: java.io.IOException,
+        ) {
             log("connectFailed host=" + inetSocketAddress.hostName + ":" + inetSocketAddress.port +
                 " " + ioe.javaClass.simpleName + ": " + (ioe.message ?: ""))
         }
