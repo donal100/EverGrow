@@ -72,6 +72,7 @@ object VoiceOutbox {
     var onSpoken: ((String) -> Unit)? = null
 
     fun attach(context: Context) {
+        appFilesDir = context.applicationContext.filesDir
         if (tuningPath == null) {
             tuningPath = java.io.File(context.filesDir, "voice_tuning.txt").absolutePath
             loadTuning()
@@ -157,8 +158,25 @@ object VoiceOutbox {
     private fun estimatedSeconds(text: String): Double = text.length / CHARS_PER_SECOND
 
     /** 只发「有字」的内容：纯标点、纯空白一律丢掉（TTS 会 400）。 */
+    /**
+     * 这一轮里 py 播报工具是不是已经开过口？
+     * 工具（py_speak_qwen）会把时间戳写进 filesDir/speech_tool_owner.txt。
+     * 只要它比「用户按下发送」更晚，这一轮的声音就归它，这里闭嘴。
+     * —— 之前两边各自判断 enabled，listen/voice 状态一变就都以为自己该说话，同一句听两遍。
+     */
+    private fun toolOwnsThisTurn(): Boolean = runCatching {
+        val f = java.io.File(appFilesDir ?: return@runCatching false, "speech_tool_owner.txt")
+        if (!f.isFile) return@runCatching false
+        val ts = f.readText().trim().toLongOrNull() ?: return@runCatching false
+        ts > sendAt && System.currentTimeMillis() - ts < 120_000L
+    }.getOrDefault(false)
+
     private fun submitSafe(chunk: String) {
         if (chunk.none { it.isLetterOrDigit() }) return
+        if (toolOwnsThisTurn()) {
+            log("skip speak: py tool owns this turn (" + chunk.take(30) + ")")
+            return
+        }
         // 谁在说话必须留痕：外放重叠的两次实测里，一条来自这里、一条来自 py 工具，
         // 但日志只有合成时间，看不出是两个来源。
         log("speak from outbox chars=" + chunk.length + " head=" + chunk.take(40))
@@ -201,6 +219,7 @@ object VoiceOutbox {
 
     /** 由调用方在 attach() 时提供 filesDir，用于读取可调参数。 */
     private var tuningPath: String? = null
+    private var appFilesDir: java.io.File? = null
 
     /** Dylan 的语速：约 175 词/分，换算成每秒字符数。 */
     private const val CHARS_PER_SECOND = 15.0
