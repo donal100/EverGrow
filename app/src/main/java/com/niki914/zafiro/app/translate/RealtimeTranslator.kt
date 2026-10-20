@@ -37,6 +37,8 @@ import java.util.concurrent.TimeUnit
 class RealtimeTranslator(
     private val ctx: Context,
     private val instructions: String,
+    /** true：只要文字，不要语音。单人模式看字幕用 —— 少一跳合成，也没有回声问题。 */
+    private val textOnly: Boolean = false,
     /** 外放时为 true：模型说话期间不再上传麦克风，否则它会听见自己并自问自答。 */
     private val halfDuplex: Boolean,
     private val onTranscript: (String) -> Unit,
@@ -72,7 +74,7 @@ class RealtimeTranslator(
         // 顺序很重要：必须先建连接、发 session.update、等 session.updated，
         // 才能开始送麦克风音频。否则服务器已经「开始处理音频」，再改配置会被拒绝：
         // "Cannot update 'input_audio_format' after session has started processing audio."
-        startPlayback()
+        if (!textOnly) startPlayback()
         openSocket()
     }
 
@@ -88,11 +90,13 @@ class RealtimeTranslator(
         socket = client.newWebSocket(req, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 val session = JSONObject()
-                    .put("modalities", JSONArray().put("text").put("audio"))
+                    .put("modalities", if (textOnly) JSONArray().put("text")
+                    else JSONArray().put("text").put("audio"))
                     .put("instructions", instructions)
-                    .put("voice", VOICE)
                     .put("input_audio_format", "pcm16")
-                    .put("output_audio_format", "pcm16")
+                if (!textOnly) {
+                    session.put("voice", VOICE).put("output_audio_format", "pcm16")
+                }
                 webSocket.send(JSONObject().put("type", "session.update").put("session", session).toString())
                 onState("connected")
             }
@@ -129,10 +133,10 @@ class RealtimeTranslator(
                     playback.put(pcm)
                 }
             }
-            "response.audio_transcript.delta" -> {
+            "response.audio_transcript.delta", "response.text.delta", "response.output_text.delta" -> {
                 transcript.append(ev.optString("delta"))
             }
-            "response.audio_transcript.done", "response.done" -> {
+            "response.audio_transcript.done", "response.text.done", "response.done" -> {
                 // 这里不再直接把 speaking 置回 false：服务端的 done 早于本地播放结束，
                 // 立刻开麦就会把自己的译文再听一遍（实测同一句话被译了三遍）。
                 responseDone = true
@@ -142,6 +146,9 @@ class RealtimeTranslator(
                 }
             }
             "error" -> onState("error: " + ev.optJSONObject("error")?.optString("message"))
+            // 未知事件一律记一行：协议字段名一旦变了（text 模态的事件名尤其容易变），
+            // 没有这行就只能靠猜。
+            else -> Logger.d(LOG_TAG, "event " + ev.optString("type"))
         }
     }
 
@@ -170,7 +177,7 @@ class RealtimeTranslator(
             while (running) {
                 val n = runCatching { rec.read(buf, 0, buf.size) }.getOrDefault(-1)
                 if (n <= 0) continue
-                if (halfDuplex && speaking) continue
+                if (halfDuplex && !textOnly && speaking) continue
                 val bytes = ByteArray(n * 2)
                 var p = 0
                 for (i in 0 until n) {

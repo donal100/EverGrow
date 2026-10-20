@@ -107,10 +107,13 @@ object Translator {
         }
         state = "connecting"
         val gen = ++generation
-        Logger.i(LOG_TAG, "startRealtime mode=" + mode + " route=" + routing)
+        // 单人模式（to-english / to-chinese）只要字幕：文字比语音稳，也不会跟你说话抢麦。
+        val textOnly = !twoWay
+        Logger.i(LOG_TAG, "startRealtime mode=" + mode + " route=" + routing + " textOnly=" + textOnly)
         realtime = RealtimeTranslator(
             app,
             instructions,
+            textOnly = textOnly,
             halfDuplex = twoWay,
             onTranscript = { text ->
                 lastTranslated = text

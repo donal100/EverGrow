@@ -465,6 +465,8 @@ fun HomePageContent(
     // 那一下 LaunchedEffect 就走 else 分支，把刚开起来的口译立刻掐掉
     // （实测症状：toast 弹出，然后什么都没发生，socket 已经是 closed 1000）。
     var translateMode by rememberSaveable { mutableStateOf<String?>(null) }
+    // 单人模式只出文字：这里轮询最近一条译文当字幕，省得为一个字符串再牵一条 Flow。
+    var translateCaption by remember { mutableStateOf("") }
     var pendingUtterance by remember { mutableStateOf<String?>(null) }
     val latestListenMode by rememberUpdatedState(listenMode)
     val callModeController = remember {
@@ -613,6 +615,20 @@ fun HomePageContent(
         }
     }
 
+    // 字幕只在单人模式跑：双向模式仍然出声，不需要屏幕上的文字。
+    LaunchedEffect(translateMode) {
+        val mode = translateMode
+        if (mode == null || mode == "two-way") {
+            translateCaption = ""
+            return@LaunchedEffect
+        }
+        while (true) {
+            val text = com.niki914.zafiro.app.translate.Translator.lastTranslated.trim()
+            if (text.isNotEmpty() && text != translateCaption) translateCaption = text
+            delay(400)
+        }
+    }
+
     LaunchedEffect(listenMode) {
         if (listenMode) callModeController.start() else callModeController.stop()
 
@@ -748,7 +764,7 @@ fun HomePageContent(
                 ),
                 PageChromeMenuItem(
                     key = "translate_earpiece",
-                    title = "Translate to English (earpiece)",
+                    title = "Translate to English (subtitles)",
                     onClick = {
                         if (latestUiState.isConfigMenuVisible) {
                             latestViewModel.sendIntent(HomeChatIntent.DismissConfigMenu)
@@ -763,7 +779,7 @@ fun HomePageContent(
                             translateMode = "to-english"
                             listenMode = false
                             voiceSpeaker.stop()
-                            Toast.makeText(locationContext, "Chinese → English in your earphones", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(locationContext, "Chinese → English subtitles", Toast.LENGTH_SHORT).show()
                         }
                     },
                 ),
@@ -908,6 +924,7 @@ fun HomePageContent(
         },
         listenMode = listenMode,
         translateMode = translateMode != null,
+        translateCaption = translateCaption,
         agentSpeaking = agentSpeaking,
         // 药丸就是一个开关：点一下关掉（并立刻静音），再点一下打开。
         // 不做「先停播再关麦」的花样 —— 用户要的是确定的行为。
@@ -1250,6 +1267,7 @@ private fun HomePageContentBody(
     onInterruptSpeech: () -> Unit = {},
     listenMode: Boolean = false,
     translateMode: Boolean = false,
+    translateCaption: String = "",
     onToggleListenMode: () -> Unit = {},
     agentSpeaking: Boolean = false,
     onPillTap: () -> Unit = {},
@@ -1416,6 +1434,28 @@ private fun HomePageContentBody(
                     .fillMaxWidth()
                     .padding(bottom = composerBottomPadding + composerHeight.value + 8.dp),
             )
+        }
+
+        // 单人模式的字幕条：贴在 composer 上方，读讲座/看片时眼睛有的看。
+        if (translateCaption.isNotEmpty()) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(start = 20.dp, end = 20.dp)
+                    .padding(bottom = composerBottomPadding + composerHeight.value + 12.dp),
+            ) {
+                Text(
+                    text = translateCaption,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier
+                        .background(
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            shape = RoundedCornerShape(16.dp),
+                        )
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                )
+            }
         }
 
         CompositionLocalProvider(
