@@ -131,8 +131,8 @@ class AgentSessionEngine {
         contextWindowFlow.value = DEFAULT_CONTEXT_WINDOW_TOKENS
         boundConfigId = ""
         compactor = Compactor(
-            summaryGenerator = { systemPrompt, userPrompt ->
-                generateSummary(systemPrompt, userPrompt)
+            summaryGenerator = { systemPrompt, messages, instruction ->
+                generateSummary(systemPrompt, messages, instruction)
             }
         )
     }

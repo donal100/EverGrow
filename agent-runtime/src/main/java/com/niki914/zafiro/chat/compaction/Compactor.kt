@@ -231,6 +231,30 @@ class Compactor(
         return true
     }
 
+    /**
+     * 确定性摘要：不依赖模型。把最近若干轮压成「user: … / assistant: …」条目。
+     * 目的不是优雅，而是保证压缩一定发生 —— 空摘要导致历史无限增长是实测过的故障。
+     */
+    private fun extractiveSummary(history: List<Message>): String {
+        val lines = ArrayList<String>()
+        for (msg in history.takeLast(80)) {
+            when (msg) {
+                is Message.User -> {
+                    val t = textOf(msg).replace(Regex("\\s+"), " ").trim()
+                    if (t.isNotEmpty()) lines.add("- user: " + t.take(160))
+                }
+                is Message.Assistant -> {
+                    val t = msg.content.filterIsInstance<ContentBlock.Text>()
+                        .joinToString(" ") { it.text }
+                        .replace(Regex("\\s+"), " ").trim()
+                    if (t.isNotEmpty()) lines.add("- assistant: " + t.take(160))
+                }
+                else -> Unit
+            }
+        }
+        return lines.joinToString("\n").take(6000)
+    }
+
     private fun textOf(user: Message.User): String =
         user.content.filterIsInstance<ContentBlock.Text>().joinToString("\n") { it.text }
 }
