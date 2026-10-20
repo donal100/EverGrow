@@ -54,11 +54,16 @@ class CallModeController(
 
     /** 播报开始：外放时把麦克风静音，耳机时保持收听（用于打断）。 */
     fun micOff() {
-        // 一律静音：只要我在说话，麦克风就不该听。
-        // 以前耳机时保留收听以便打断，结果 Bluetooth 耳机（A2DP）也算"耳机"，
-        // 于是外放场景照样把我说的话转回来。
-        ListenBus.setMuted(true)
-        log("mic muted (speaking)")
+        // 只有声音真的走扬声器时才静音。
+        // 判断依据是「现在这一刻」的输出状态，而不是「有没有配对过耳机」：
+        // 之前用设备列表判断，蓝牙耳机连着但声音从扬声器出来，就漏掉了。
+        val onSpeaker = !audioOnHeadset()
+        if (onSpeaker) {
+            ListenBus.setMuted(true)
+            log("mic muted (speaking, output=speaker)")
+        } else {
+            log("mic live (speaking, output=headset) - barge-in available")
+        }
     }
 
     /** 播报结束：恢复。 */
@@ -82,6 +87,17 @@ class CallModeController(
     }
 
     fun release() = stop()
+
+    /** 声音此刻是否真的从耳机出来（有线/蓝牙 A2DP/USB）。 */
+    private fun audioOnHeadset(): Boolean = runCatching {
+        val am = context.getSystemService(android.content.Context.AUDIO_SERVICE) as android.media.AudioManager
+        val wired = am.getDevices(android.media.AudioManager.GET_DEVICES_OUTPUTS).any {
+            it.type == android.media.AudioDeviceInfo.TYPE_WIRED_HEADPHONES ||
+                it.type == android.media.AudioDeviceInfo.TYPE_WIRED_HEADSET ||
+                it.type == android.media.AudioDeviceInfo.TYPE_USB_HEADSET
+        }
+        wired || am.isBluetoothA2dpOn || am.isBluetoothScoOn
+    }.getOrDefault(false)
 
     /** 当前是否有耳机输出（有线/蓝牙/USB）。 */
     private fun hasHeadphones(): Boolean = runCatching {
