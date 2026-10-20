@@ -57,7 +57,9 @@ class CallModeController(
                     )
                 // 正在播报时，麦克风听到的多半是我自己；外放没有打断功能，直接丢弃
                 VoiceOutbox.isBusy() -> log("dropped while speaking: " + text.take(40))
-                echoLikely(text) -> log("dropped as echo: " + text.take(40))
+                // 不再用「文本像不像我说过的话」来判回声：用户复述、引用、讨论我刚才
+                // 说的内容都会命中，实测 21:29 连着两条正常发言被当成 echo 丢掉。
+                // 回声已经由上面的时间窗解决，文本比对只在打断判断里保留。
                 else -> onUtterance(text)
             }
         }
