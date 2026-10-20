@@ -901,6 +901,7 @@ fun HomePageContent(
             if (listenMode) callModeController.resume()
         },
         listenMode = listenMode,
+        translateMode = translateMode != null,
         agentSpeaking = agentSpeaking,
         // 药丸就是一个开关：点一下关掉（并立刻静音），再点一下打开。
         // 不做「先停播再关麦」的花样 —— 用户要的是确定的行为。
