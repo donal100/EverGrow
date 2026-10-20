@@ -1,8 +1,8 @@
 package com.niki914.zafiro.app
 
-import android.app.ActivityLifecycleCallbacks
 import android.app.ActivityManager
 import android.app.Application
+import android.app.Application.ActivityLifecycleCallbacks
 import androidx.appcompat.app.AppCompatDelegate
 import com.google.android.material.color.DynamicColors
 import com.niki914.logging.Logger
