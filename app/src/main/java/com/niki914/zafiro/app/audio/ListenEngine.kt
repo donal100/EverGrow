@@ -47,7 +47,7 @@ class ListenEngine(
     @Volatile var muted = false
 
     /** 端上识别器是否还能用：报 12/13（语言不支持/不可用）后就永久退回网络识别器。 */
-    @Volatile private var preferOnDevice = true
+    @Volatile private var preferOnDevice = false
     /** 连续失败次数，用来做退避：0.6s 起翻倍，最长 8s。 */
     @Volatile private var consecutiveErrors = 0
 
@@ -133,7 +133,7 @@ class ListenEngine(
             // 优先用「端上识别器」：实测网络识别器会连续 error=11（server disconnected）
             // 和 error=7（network），会话就这么断掉，听感上就是「它又不理我了」。
             // 端上模型不依赖网络，台词一样（Google 的 en-US/中文模型都在本机）。
-            val onDevice = preferOnDevice &&
+            val onDevice = preferOnDevice && onDeviceEnabled() &&
                 android.os.Build.VERSION.SDK_INT >= 31 &&
                 runCatching { SpeechRecognizer.isOnDeviceRecognitionAvailable(context) }.getOrDefault(false)
             val r = if (onDevice) {
@@ -146,10 +146,12 @@ class ListenEngine(
             r.startListening(
                 Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                     putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                    putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-US")
+                    // 语言可配：filesDir/voice_tuning.txt 里写 listen_lang=zh-HK 即可改。
+                    // 写 listen_lang= 空（或 auto）就不传语言，交回系统默认 —— 实测
+                    // 这台设备上 en-US 会报 error=13（language_unavailable）。
+                    val lang = listenLang()
+                    if (lang.isNotEmpty()) putExtra(RecognizerIntent.EXTRA_LANGUAGE, lang)
                     putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-                    // 即使回落成网络识别器，也尽量让系统走端上模型
-                    putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
                     putExtra(RecognizerIntent.EXTRA_SEGMENTED_SESSION, true)
                     putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE, pfdRead)
                     putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_ENCODING, AudioFormat.ENCODING_PCM_16BIT)
@@ -230,6 +232,26 @@ class ListenEngine(
         pfdRead = null
         pfdWrite = null
     }
+
+
+    /** 读 voice_tuning.txt 里的 listen_lang=，没配就用 en-US。 */
+    private fun listenLang(): String {
+        val raw = runCatching {
+            File(context.filesDir, "voice_tuning.txt").readText()
+        }.getOrDefault("")
+        val line = raw.lineSequence().firstOrNull { it.trim().startsWith("listen_lang=") }
+            ?: return "en-US"
+        val v = line.substringAfter("=").trim()
+        if (v == "auto") return ""
+        return v
+    }
+
+
+    /** 端上识别器默认关闭：这台机器上它报 error=13，网络识别器才是能用的那条。 */
+    private fun onDeviceEnabled(): Boolean = runCatching {
+        File(context.filesDir, "voice_tuning.txt").readText()
+            .lineSequence().any { it.trim() == "listen_ondevice=1" }
+    }.getOrDefault(false)
 
     private fun log(msg: String) {
         runCatching {
