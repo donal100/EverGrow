@@ -83,10 +83,17 @@ class AgentSessionEngine {
     internal val toolRegistry: ToolRegistry get() = toolSynchronizer.toolRegistry
 
     var compactor: Compactor = Compactor(
-        summaryGenerator = { systemPrompt, userPrompt ->
-            generateSummary(systemPrompt, userPrompt)
+        summaryGenerator = { systemPrompt, messages, instruction ->
+            generateSummary(systemPrompt, messages, instruction)
         }
     )
+
+    init {
+        // 只有用「这次对话真正的 system prompt」重放，摘要请求才和上一次请求同前缀
+        compactor.systemPromptProvider = {
+            runtimeState?.snapshot?.config?.finalSystemPrompt ?: ""
+        }
+    }
 
     internal var okia: Okia?
         get() = sessionAssembler.activeSession
@@ -409,7 +416,11 @@ class AgentSessionEngine {
         )
     }
 
-    private suspend fun generateSummary(systemPrompt: String, userPrompt: String): String {
+    private suspend fun generateSummary(
+        systemPrompt: String,
+        messages: List<Message>,
+        instruction: String,
+    ): String {
         val state = runtimeState ?: run {
             refresh()
             runtimeState
@@ -419,7 +430,8 @@ class AgentSessionEngine {
             protocol = protocol,
             config = state.snapshot.config,
             systemPrompt = systemPrompt,
-            userPrompt = userPrompt,
+            messages = messages,
+            instruction = instruction,
         )
     }
 

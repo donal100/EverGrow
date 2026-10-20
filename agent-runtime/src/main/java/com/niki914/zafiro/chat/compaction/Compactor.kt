@@ -23,13 +23,22 @@ import kotlin.coroutines.coroutineContext
  */
 class Compactor(
     private val summaryGenerator: SummaryGenerator,
+    /** 真实会话的 system prompt（用于前缀重放，保证与上一次请求逐字节一致）。 */
+    var systemPromptProvider: () -> String = { CompactorPrompts.SUMMARIZATION_SYSTEM_PROMPT },
     var thresholdRatio: Float = DEFAULT_THRESHOLD_RATIO,
     private val keepTurns: Int = DEFAULT_KEEP_TURNS,
 ) {
 
     /** 摘要模型调用契约。 */
+    /**
+     * 生成摘要。参数刻意与 DeepSeek Harness 的 SummarizationInput 对齐：
+     * 把「真实的系统提示 + 真实的消息序列」交进来，末尾再追加一条指令，
+     * 这样前缀与刚才那次请求逐字节一致，provider 的 KV cache 能直接命中。
+     * 旧做法（自带一条 system prompt + 把历史压成一段文本）前缀完全不同，
+     * 每次都等于把整段历史重新处理一遍。
+     */
     fun interface SummaryGenerator {
-        suspend fun generate(systemPrompt: String, userPrompt: String): String
+        suspend fun generate(systemPrompt: String, messages: List<Message>, instruction: String): String
     }
 
     companion object {
@@ -181,13 +190,14 @@ class Compactor(
         val conversationText = serializeConversation(history)
         if (conversationText.isBlank()) return false
 
-        // 构建提示词
-        val userPrompt = CompactorPrompts.buildSummarizationUserPrompt(conversationText, previousSummary)
-        val systemPrompt = CompactorPrompts.SUMMARIZATION_SYSTEM_PROMPT
+        // DeepSeek Harness 的做法：重放真实前缀（同一套 system + 同一条消息序列），
+        // 只把压缩指令作为最后一条 user 消息追加，从而命中 prefix cache。
+        val instruction = CompactorPrompts.buildSummarizationUserPrompt(conversationText, previousSummary)
+        val systemPrompt = systemPromptProvider()
 
         val summaryResult: String
         try {
-            summaryResult = summaryGenerator.generate(systemPrompt, userPrompt)
+            summaryResult = summaryGenerator.generate(systemPrompt, history, instruction)
         } catch (e: CancellationException) {
             // 核心不变量：用户取消严禁生吞，不向会话树追加节点（“无事发生”）
             Logger.i(LOG_TAG, "compaction cancelled by user or coroutine, leaving session untouched")

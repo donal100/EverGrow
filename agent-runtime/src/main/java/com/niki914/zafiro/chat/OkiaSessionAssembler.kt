@@ -229,11 +229,17 @@ internal class OkiaSessionAssembler(
         LlmProtocol.AnthropicMessages -> AnthropicMessagesProtocol()
     }
 
+    /**
+     * 用「重放前缀」的方式生成摘要（对齐 DeepSeek Harness）：
+     * 开一个配置相同的会话，把真实的消息序列原样 append 回去，
+     * 最后把压缩指令作为一条 user 消息发送。前缀一致 -> KV cache 命中。
+     */
     suspend fun generateSummary(
         protocol: LlmProtocol,
         config: ResolvedLlmConfig,
         systemPrompt: String,
-        userPrompt: String,
+        messages: List<Message>,
+        instruction: String,
     ): String {
         val endpoint = config.endpoint.ifBlank { protocolDefaultEndpointFallback(protocol) }
         val wireProtocol = wireProtocolFor(protocol)
@@ -251,8 +257,12 @@ internal class OkiaSessionAssembler(
         }
         try {
             var summary = ""
+            // 重放历史：失败就退回「只发指令」的旧行为，摘要功能不能因此停摆
+            for (msg in messages) {
+                runCatching { session.append(msg) }
+            }
             session.send(
-                text = userPrompt,
+                text = instruction,
                 options = TurnOptions(systemPrompt = systemPrompt),
             ) { event ->
                 if (event is TurnEvent.TurnCompleted) {
