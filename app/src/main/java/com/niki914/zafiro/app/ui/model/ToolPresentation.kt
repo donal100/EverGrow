@@ -77,8 +77,6 @@ object ToolPresentation {
         "open_uri" -> R.string.ui_tool_display_open_uri
         "read_custom_tool" -> R.string.ui_tool_display_read_custom_tool
         "find_installed_apps" -> R.string.ui_tool_display_find_installed_apps
-        "screen_operation_accessibility" -> R.string.ui_tool_display_screen_operation_accessibility
-        "screen_operation_shell" -> R.string.ui_tool_display_screen_operation_shell
         "screenshot" -> R.string.ui_tool_display_screenshot
         "view_image" -> R.string.ui_tool_display_view_image
         else -> null

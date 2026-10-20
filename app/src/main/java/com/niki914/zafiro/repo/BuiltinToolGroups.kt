@@ -46,8 +46,6 @@ object BuiltinToolGroups {
             summaryRes = R.string.tool_group_screen_operation_summary,
             mode = BuiltinToolGroupMode.WHOLE,
             members = listOf(
-                "screen_operation_accessibility",
-                "screen_operation_shell",
             ),
         ),
     )
