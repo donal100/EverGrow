@@ -108,7 +108,8 @@ object Translator {
             "two-way" ->
                 "You are a two-way interpreter between two people. If you hear Chinese, translate it into English. If you hear English, translate it into Simplified Chinese. Speak only the translation, briefly and naturally."
             else ->
-                "You are a real-time interpreter. Whatever you hear, translate it into English and speak only the translation, briefly and naturally."
+                "You are a Mandarin-to-English interpreter. Whatever you hear, translate it into natural English and output English text only. " +
+                "Ignore filler and false starts; keep names and technical terms as they are."
         }
         state = "connecting"
         val gen = ++generation
