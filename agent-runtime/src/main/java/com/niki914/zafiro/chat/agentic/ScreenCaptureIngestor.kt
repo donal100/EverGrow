@@ -8,9 +8,9 @@ object ScreenCaptureIngestor {
 
     sealed interface CaptureResult {
         data class Ok(val path: String) : CaptureResult
-        data class Err(val message: String) : CaptureResult
+        data class Err(val stage: String = "capture", val message: String) : CaptureResult
     }
 
     suspend fun captureAndIngest(): CaptureResult =
-        CaptureResult.Err("screenshot unavailable: accessibility removed")
+        CaptureResult.Err("capture", "screenshot unavailable: accessibility removed")
 }

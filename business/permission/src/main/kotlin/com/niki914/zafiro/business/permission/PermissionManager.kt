@@ -48,7 +48,8 @@ interface PermissionScope {
  * 宿主进程的 packageName 是宿主包（Breeno/XiaoAi），拿它拼 ComponentName 与 shell 命令会错包。
  */
 class PermissionManagerImpl(
-    private val accessibilityService: ComponentName,
+    // 无障碍服务已经移除；保留可空参数，让 Root/Shizuku 通道的权限上报仍能工作
+    private val accessibilityService: ComponentName? = null,
 ) : PermissionManager {
 
     private val appService: ApplicationService = requireService()

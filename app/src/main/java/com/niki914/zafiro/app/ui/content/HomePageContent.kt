@@ -1427,6 +1427,7 @@ private fun HomePageContentBody(
                 onToggleVoiceMode = onToggleVoiceMode,
                 onInterruptSpeech = onInterruptSpeech,
                 listenMode = listenMode,
+                translateMode = translateMode,
                 onToggleListenMode = onToggleListenMode,
                 agentSpeaking = agentSpeaking,
                 onPillTap = onPillTap,
