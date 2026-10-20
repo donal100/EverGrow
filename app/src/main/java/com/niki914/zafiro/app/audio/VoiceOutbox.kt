@@ -168,7 +168,11 @@ object VoiceOutbox {
         val f = java.io.File(appFilesDir ?: return@runCatching false, "speech_tool_owner.txt")
         if (!f.isFile) return@runCatching false
         val ts = f.readText().trim().toLongOrNull() ?: return@runCatching false
-        ts > sendAt && System.currentTimeMillis() - ts < 120_000L
+        // 声明必须在 90 秒内，而且必须晚于本轮发送；
+        // 两个条件缺一不可 —— 实测只剩时间条件时，上一轮的声明会让 app 一直不说话
+        // （21:33:52 "skip speak: py tool owns this turn"，结果谁也没出声）。
+        val fresh = System.currentTimeMillis() - ts < 90_000L
+        fresh && ts > sendAt
     }.getOrDefault(false)
 
     private fun submitSafe(chunk: String) {
@@ -229,6 +233,9 @@ object VoiceOutbox {
 
     /** 新一轮开始：允许把同样的文本再念一次。 */
     fun beginTurn() {
+        runCatching {
+            appFilesDir?.let { java.io.File(it, "speech_tool_owner.txt").delete() }
+        }
         pending.setLength(0)
         lastFull = ""
     }
