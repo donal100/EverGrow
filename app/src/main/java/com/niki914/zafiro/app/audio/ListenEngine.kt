@@ -125,13 +125,25 @@ class ListenEngine(
             pfdRead = pipe[0]
             pfdWrite = pipe[1]
             out = FileOutputStream(pipe[1].fileDescriptor)
-            val r = SpeechRecognizer.createSpeechRecognizer(context)
+            // 优先用「端上识别器」：实测网络识别器会连续 error=11（server disconnected）
+            // 和 error=7（network），会话就这么断掉，听感上就是「它又不理我了」。
+            // 端上模型不依赖网络，台词一样（Google 的 en-US/中文模型都在本机）。
+            val onDevice = android.os.Build.VERSION.SDK_INT >= 31 &&
+                runCatching { SpeechRecognizer.isOnDeviceRecognitionAvailable(context) }.getOrDefault(false)
+            val r = if (onDevice) {
+                SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
+            } else {
+                SpeechRecognizer.createSpeechRecognizer(context)
+            }
+            log("recognizer=" + (if (onDevice) "on-device" else "network"))
             r.setRecognitionListener(listener)
             r.startListening(
                 Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                     putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
                     putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-US")
                     putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+                    // 即使回落成网络识别器，也尽量让系统走端上模型
+                    putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
                     putExtra(RecognizerIntent.EXTRA_SEGMENTED_SESSION, true)
                     putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE, pfdRead)
                     putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_ENCODING, AudioFormat.ENCODING_PCM_16BIT)
