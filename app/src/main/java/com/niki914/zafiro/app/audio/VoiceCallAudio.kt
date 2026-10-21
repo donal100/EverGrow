@@ -54,14 +54,25 @@ class VoiceCallAudio(private val context: Context) {
             focus = req
             val granted = am.requestAudioFocus(req) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
             am.mode = AudioManager.MODE_IN_COMMUNICATION
-            log("enter: mode=IN_COMMUNICATION focus=" + granted)
+            // 读回来，别相信设置成功：缺 MODIFY_AUDIO_SETTINGS 时 setMode 会被静默忽略
+            // （实测 getMode 立刻回到 0），日志却说自己设成功了 —— 那是骗自己。
+            log("enter: mode=" + am.mode + " wanted=" + AudioManager.MODE_IN_COMMUNICATION + " focus=" + granted)
 
             if (hasHeadset()) {
                 // SCO 是耳机麦克风唯一的路；没有 BLUETOOTH_CONNECT 的话这一步会静默失效
                 runCatching { am.stopBluetoothSco() }
                 am.startBluetoothSco()
                 am.isBluetoothScoOn = true
-                log("sco requested (headset present)")
+                // SCO 建链是异步的：放到后台线程等，绝不能在主线程 sleep（会 ANR）
+                Thread {
+                    var waited = 0
+                    while (waited < 3000 && !am.isBluetoothScoOn) {
+                        runCatching { Thread.sleep(200) }
+                        waited += 200
+                    }
+                    log("sco: on=" + am.isBluetoothScoOn + " after " + waited + "ms")
+                    log("inputs=" + devices(AudioManager.GET_DEVICES_INPUTS))
+                }.apply { isDaemon = true }.start()
             } else {
                 am.isSpeakerphoneOn = true
                 log("no headset: speakerphone on, phone mic")

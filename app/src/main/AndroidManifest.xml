@@ -18,6 +18,9 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <!-- 通话模式要用耳机麦克风：Android 12+ 没有这个权限，startBluetoothSco 会静默失效 -->
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <!-- 没有这一条，setMode / startBluetoothSco / setSpeakerphoneOn 全部被静默忽略
+         （读得出来，写不进去）——实测 MODE_IN_COMMUNICATION 立刻回到 0 -->
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <!-- 定位：给 agent 的 py_gps 工具读取原始 GPS 数据（经纬度/精度/高度/速度/航向） -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
