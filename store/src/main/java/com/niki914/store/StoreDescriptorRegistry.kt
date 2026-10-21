@@ -37,6 +37,8 @@ object StoreDescriptorRegistry {
             "settings/llm/openrouter_catalog.json",
             """{"fetched_at":0,"models":{}}"""
         ),
+        // 记忆是用户私有数据，不进 APK：默认是空文档，实际内容只存在设备上的
+        // settings/agents/main/memory.json —— 和 local_settings.json 一样属于本机状态。
         StoreDescriptor(
             AGENT_MAIN_MEMORY_ID,
             "settings/agents/main/memory.json",
@@ -63,7 +65,7 @@ object StoreDescriptorRegistry {
         StoreDescriptor(
             TOOLS_MCP_SERVICE_ID,
             "settings/tools/mcp/service.json",
-            """{"enabled":false,"port":8791,"host":"127.0.0.1","bearerToken":"","exposedTools":["screen_operation_accessibility","screen_operation_shell","screenshot","launch_app","find_installed_apps","open_uri","load_skill","notify","view_image","memory"],"keepScreenOn":true}"""
+            """{"enabled":false,"port":8791,"host":"127.0.0.1","bearerToken":"","exposedTools":["screenshot","launch_app","find_installed_apps","open_uri","load_skill","notify","view_image","memory"],"keepScreenOn":true}"""
         ),
         StoreDescriptor(
             RULES_EXECUTION_ID,

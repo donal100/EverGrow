@@ -16,6 +16,7 @@ class BuiltinToolTest {
 
         assertEquals(
             listOf(
+                "compact",
                 "execute_python",
                 "find_installed_apps",
                 "launch_app",
@@ -24,9 +25,6 @@ class BuiltinToolTest {
                 "notify",
                 "open_uri",
                 "py_meta_tools",
-                "screen_operation_accessibility",
-                "screen_operation_shell",
-                "screenshot",
                 "shell",
                 "ssh",
                 "view_image",

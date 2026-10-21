@@ -23,13 +23,22 @@ import kotlin.coroutines.coroutineContext
  */
 class Compactor(
     private val summaryGenerator: SummaryGenerator,
+    /** 真实会话的 system prompt（用于前缀重放，保证与上一次请求逐字节一致）。 */
+    var systemPromptProvider: () -> String = { CompactorPrompts.SUMMARIZATION_SYSTEM_PROMPT },
     var thresholdRatio: Float = DEFAULT_THRESHOLD_RATIO,
     private val keepTurns: Int = DEFAULT_KEEP_TURNS,
 ) {
 
     /** 摘要模型调用契约。 */
+    /**
+     * 生成摘要。参数刻意与 DeepSeek Harness 的 SummarizationInput 对齐：
+     * 把「真实的系统提示 + 真实的消息序列」交进来，末尾再追加一条指令，
+     * 这样前缀与刚才那次请求逐字节一致，provider 的 KV cache 能直接命中。
+     * 旧做法（自带一条 system prompt + 把历史压成一段文本）前缀完全不同，
+     * 每次都等于把整段历史重新处理一遍。
+     */
     fun interface SummaryGenerator {
-        suspend fun generate(systemPrompt: String, userPrompt: String): String
+        suspend fun generate(systemPrompt: String, messages: List<Message>, instruction: String): String
     }
 
     companion object {
@@ -43,6 +52,12 @@ class Compactor(
 
         /** 单条工具结果最大保留字符数（对齐 Pi 的 TOOL_RESULT_MAX_CHARS）。 */
         const val TOOL_RESULT_MAX_CHARS = 2000
+
+        /**
+         * 首屏压缩（还没有检查点、无法重放）时，喂给摘要模型的文本总长上限。
+         * 约 40 万字符 ≈ 12 万 token，离 1M 窗口很远，但足够装下真实进展。
+         */
+        const val MAX_SUMMARY_INPUT_CHARS = 400_000
 
         /**
          * 判定是否应当触发压缩。
@@ -177,17 +192,31 @@ class Compactor(
             if (msg is Message.User) SummaryBlock.strip(textOf(msg)).payload?.summary else null
         }.lastOrNull()
 
-        // 展平对话
-        val conversationText = serializeConversation(history)
-        if (conversationText.isBlank()) return false
+        // 重放边界：只重放「真正会被发出去」的那段前缀，也就是裁剪之后的切片。
+        // 旧实现把 6553 条完整历史重放一遍、instruction 里再塞一份序列化文本，
+        // 同样的内容付了两遍 token（≈76 万），服务端直接拒单（stopReason=Parse），
+        // 摘要于是恒为空，只能吃抽取式兜底 —— 压缩了但等于没压缩。
+        val pruned = ContextPruner.prune(history)
+        val replayMessages = if (pruned.hasCompacted) pruned.messages else emptyList()
 
-        // 构建提示词
-        val userPrompt = CompactorPrompts.buildSummarizationUserPrompt(conversationText, previousSummary)
-        val systemPrompt = CompactorPrompts.SUMMARIZATION_SYSTEM_PROMPT
+        val instruction = if (replayMessages.isNotEmpty()) {
+            // 常规路径：真实消息已重放，只追加指令 -> 前缀与上一轮一致，KV cache 命中。
+            CompactorPrompts.buildSummarizationInstruction(previousSummary)
+        } else {
+            // 首次压缩、尚无检查点：历史太长没法整段重放，退回文本摘要路径，
+            // 并对工具结果截断 + 总长封顶，避免刚修好的窗口又被撑爆。
+            val conversationText = serializeConversation(history)
+            if (conversationText.isBlank()) return false
+            CompactorPrompts.buildSummarizationUserPrompt(
+                conversationText.takeLast(MAX_SUMMARY_INPUT_CHARS),
+                previousSummary,
+            )
+        }
+        val systemPrompt = systemPromptProvider()
 
         val summaryResult: String
         try {
-            summaryResult = summaryGenerator.generate(systemPrompt, userPrompt)
+            summaryResult = summaryGenerator.generate(systemPrompt, replayMessages, instruction)
         } catch (e: CancellationException) {
             // 核心不变量：用户取消严禁生吞，不向会话树追加节点（“无事发生”）
             Logger.i(LOG_TAG, "compaction cancelled by user or coroutine, leaving session untouched")
@@ -197,8 +226,14 @@ class Compactor(
             return false
         }
 
-        if (summaryResult.isBlank()) {
-            Logger.w(LOG_TAG, "compaction generator returned empty summary, aborting")
+        // 模型摘要为空时不能放弃：实测每一轮都是空摘要，于是历史一直涨到 76 万 token。
+        // 用一个确定性的抽取式摘要兜底：把旧对话按「谁说了什么」压成条目，宁粗勿丢。
+        val effectiveSummary = summaryResult.ifBlank {
+            Logger.w(LOG_TAG, "summary generator returned blank, using extractive fallback")
+            extractiveSummary(history)
+        }
+        if (effectiveSummary.isBlank()) {
+            Logger.w(LOG_TAG, "compaction produced no usable summary, aborting")
             return false
         }
 
@@ -206,13 +241,37 @@ class Compactor(
         currentCoroutineContext().ensureActive()
 
         // 组装 SummaryBlock 节点并挂入树
-        val payload = SummaryBlock.Payload(keepTurns = keepTurns, summary = summaryResult.trim())
+        val payload = SummaryBlock.Payload(keepTurns = keepTurns, summary = effectiveSummary.trim())
         val blockText = SummaryBlock.block(payload)
         val checkpointMessage = Message.User(listOf(ContentBlock.Text(blockText)))
 
         session.append(checkpointMessage)
         Logger.i(LOG_TAG, "compaction committed successfully with keepTurns=$keepTurns")
         return true
+    }
+
+    /**
+     * 确定性摘要：不依赖模型。把最近若干轮压成「user: … / assistant: …」条目。
+     * 目的不是优雅，而是保证压缩一定发生 —— 空摘要导致历史无限增长是实测过的故障。
+     */
+    private fun extractiveSummary(history: List<Message>): String {
+        val lines = ArrayList<String>()
+        for (msg in history.takeLast(80)) {
+            when (msg) {
+                is Message.User -> {
+                    val t = textOf(msg).replace(Regex("\\s+"), " ").trim()
+                    if (t.isNotEmpty()) lines.add("- user: " + t.take(160))
+                }
+                is Message.Assistant -> {
+                    val t = msg.message.content.filterIsInstance<ContentBlock.Text>()
+                        .joinToString(" ") { it.text }
+                        .replace(Regex("\\s+"), " ").trim()
+                    if (t.isNotEmpty()) lines.add("- assistant: " + t.take(160))
+                }
+                else -> Unit
+            }
+        }
+        return lines.joinToString("\n").take(6000)
     }
 
     private fun textOf(user: Message.User): String =

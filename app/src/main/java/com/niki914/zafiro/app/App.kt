@@ -2,6 +2,7 @@ package com.niki914.zafiro.app
 
 import android.app.ActivityManager
 import android.app.Application
+import android.app.Application.ActivityLifecycleCallbacks
 import androidx.appcompat.app.AppCompatDelegate
 import com.google.android.material.color.DynamicColors
 import com.niki914.logging.Logger
@@ -34,8 +35,35 @@ class App : Application() {
 
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    /**
+     * 前后台切换留痕。用户报的两次问题（回答后麦克风再也不听、同一句播两遍）
+     * 都发生在切屏之后，而日志里完全看不出切换过 —— 只能猜。
+     * 写到 call_mode.log，和播报日志同一条时间轴。
+     */
+    private fun installLifecycleLog() {
+        registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
+            private fun log(event: String) {
+                runCatching {
+                    File(filesDir, "call_mode.log")
+                        .appendText(System.currentTimeMillis().toString() + "  [activity] " + event + "\n")
+                }
+            }
+
+            override fun onActivityStarted(activity: android.app.Activity) = log("onStart")
+            override fun onActivityResumed(activity: android.app.Activity) = log("onResume")
+            override fun onActivityPaused(activity: android.app.Activity) = log("onPause")
+            override fun onActivityStopped(activity: android.app.Activity) = log("onStop")
+            override fun onActivityCreated(activity: android.app.Activity, bundle: android.os.Bundle?) = Unit
+            override fun onActivitySaveInstanceState(activity: android.app.Activity, outState: android.os.Bundle) = Unit
+            override fun onActivityDestroyed(activity: android.app.Activity) = Unit
+        })
+    }
+
+
     override fun onCreate() {
         super.onCreate()
+        installLifecycleLog()
+        com.niki914.zafiro.repo.SharedHttp.attachLog(filesDir)
         CrashRecorder.install(this)
         // 日志 debug 门控：release 构建 DEBUG/VERBOSE 全停，仅 INFO+ 输出
         Logger.setDebugProvider { BuildConfig.DEBUG }

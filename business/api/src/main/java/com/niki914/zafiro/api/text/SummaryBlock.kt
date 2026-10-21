@@ -35,8 +35,17 @@ object SummaryBlock {
     /** 摘要正文包裹闭标签。 */
     const val TAG_SUMMARY_CLOSE = "</summary>"
 
-    /** 给模型的提示文案，不本地化。 */
-    const val PROMPT_INTRO = "The conversation history before this point was compacted into the following summary:"
+    /**
+     * 给模型的提示文案，不本地化。
+     *
+     * 末尾一句是「可回溯」提示：压缩摘要必然有损，但原始条目仍然存在数据库里，
+     * agent 可以用 history_search / history_show 工具按 id 把原文捞回来。
+     * 没有这句，模型会把摘要当成全集，遇到细节就凭印象编。
+     */
+    const val PROMPT_INTRO = "The conversation history before this point was compacted into the following summary. " +
+            "The summary is lossy: the complete original messages are still stored and searchable " +
+            "(py_history_search for snippets, py_history_show for full entries), so look things up there " +
+            "before concluding that a detail was never discussed:"
 
     /**
      * 压缩载荷数据对象。

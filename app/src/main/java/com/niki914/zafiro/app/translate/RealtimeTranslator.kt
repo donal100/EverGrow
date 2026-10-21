@@ -8,6 +8,7 @@ import android.media.AudioRecord
 import android.media.AudioTrack
 import android.media.MediaRecorder
 import android.util.Base64
+import com.niki914.logging.Logger
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -36,6 +37,10 @@ import java.util.concurrent.TimeUnit
 class RealtimeTranslator(
     private val ctx: Context,
     private val instructions: String,
+    /** true：只要文字，不要语音。单人模式看字幕用 —— 少一跳合成，也没有回声问题。 */
+    private val textOnly: Boolean = false,
+    /** 音色：粤语必须用专门的粤语音色，普通话音色念粤字就是「硬念」。 */
+    private val voice: String = "Serena",
     /** 外放时为 true：模型说话期间不再上传麦克风，否则它会听见自己并自问自答。 */
     private val halfDuplex: Boolean,
     private val onTranscript: (String) -> Unit,
@@ -51,6 +56,14 @@ class RealtimeTranslator(
     @Volatile private var running = false
     /** 服务器正在返回译文：外放模式下这期间不送麦克风音频。 */
     @Volatile private var speaking = false
+    /** 本地播报期间把麦克风掐掉，别把自己念的声音再送上去（粤语走本地合成时会用到）。 */
+    @Volatile var muted: Boolean = false
+    /** 服务端说完一句了，但 AudioTrack 里可能还在排队 —— 播放完之前不能重新开麦。 */
+    @Volatile private var responseDone = false
+    private var audioBytes = 0L
+    private val audioWarned = java.util.concurrent.atomic.AtomicBoolean(false)
+    private var micBytes = 0L
+    private var micLogAt = 0L
     private var record: AudioRecord? = null
     private var micThread: Thread? = null
     private var track: AudioTrack? = null
@@ -65,7 +78,7 @@ class RealtimeTranslator(
         // 顺序很重要：必须先建连接、发 session.update、等 session.updated，
         // 才能开始送麦克风音频。否则服务器已经「开始处理音频」，再改配置会被拒绝：
         // "Cannot update 'input_audio_format' after session has started processing audio."
-        startPlayback()
+        if (!textOnly) startPlayback()
         openSocket()
     }
 
@@ -81,11 +94,13 @@ class RealtimeTranslator(
         socket = client.newWebSocket(req, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 val session = JSONObject()
-                    .put("modalities", JSONArray().put("text").put("audio"))
+                    .put("modalities", if (textOnly) JSONArray().put("text")
+                    else JSONArray().put("text").put("audio"))
                     .put("instructions", instructions)
-                    .put("voice", VOICE)
                     .put("input_audio_format", "pcm16")
-                    .put("output_audio_format", "pcm16")
+                if (!textOnly) {
+                    session.put("voice", voice).put("output_audio_format", "pcm16")
+                }
                 webSocket.send(JSONObject().put("type", "session.update").put("session", session).toString())
                 onState("connected")
             }
@@ -113,22 +128,31 @@ class RealtimeTranslator(
                 onState("ready")
                 startMic()
             }
-            "response.created" -> speaking = true
+            "response.created" -> { speaking = true; responseDone = false }
             "response.audio.delta" -> {
                 val b64 = ev.optString("delta")
-                if (b64.isNotEmpty()) playback.put(Base64.decode(b64, Base64.DEFAULT))
+                if (b64.isNotEmpty()) {
+                    val pcm = Base64.decode(b64, Base64.DEFAULT)
+                    audioBytes += pcm.size
+                    playback.put(pcm)
+                }
             }
-            "response.audio_transcript.delta" -> {
+            "response.audio_transcript.delta", "response.text.delta", "response.output_text.delta" -> {
                 transcript.append(ev.optString("delta"))
             }
-            "response.audio_transcript.done", "response.done" -> {
-                speaking = false
+            "response.audio_transcript.done", "response.text.done", "response.done" -> {
+                // 这里不再直接把 speaking 置回 false：服务端的 done 早于本地播放结束，
+                // 立刻开麦就会把自己的译文再听一遍（实测同一句话被译了三遍）。
+                responseDone = true
                 if (transcript.isNotEmpty()) {
                     onTranscript(transcript.toString())
                     transcript.setLength(0)
                 }
             }
             "error" -> onState("error: " + ev.optJSONObject("error")?.optString("message"))
+            // 未知事件一律记一行：协议字段名一旦变了（text 模态的事件名尤其容易变），
+            // 没有这行就只能靠猜。
+            else -> Logger.d(LOG_TAG, "event " + ev.optString("type"))
         }
     }
 
@@ -143,8 +167,12 @@ class RealtimeTranslator(
         val rec = runCatching {
             AudioRecord(MediaRecorder.AudioSource.VOICE_COMMUNICATION, 16_000,
                 AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, maxOf(minBuf, 32_000))
-        }.getOrNull() ?: return
-        if (rec.state != AudioRecord.STATE_INITIALIZED) { rec.release(); return }
+        }.getOrNull()
+        if (rec == null) { Logger.w(LOG_TAG, "mic create failed"); return }
+        if (rec.state != AudioRecord.STATE_INITIALIZED) {
+            Logger.w(LOG_TAG, "mic not initialized state=" + rec.state); rec.release(); return
+        }
+        Logger.i(LOG_TAG, "mic recording source=VOICE_COMMUNICATION")
         runCatching { AudioRouter.builtInMic(ctx)?.let { rec.setPreferredDevice(it) } }
         record = rec
         runCatching { rec.startRecording() }
@@ -153,7 +181,8 @@ class RealtimeTranslator(
             while (running) {
                 val n = runCatching { rec.read(buf, 0, buf.size) }.getOrDefault(-1)
                 if (n <= 0) continue
-                if (halfDuplex && speaking) continue
+                if (muted) continue
+                if (halfDuplex && !textOnly && speaking) continue
                 val bytes = ByteArray(n * 2)
                 var p = 0
                 for (i in 0 until n) {
@@ -162,7 +191,13 @@ class RealtimeTranslator(
                     bytes[p++] = ((v shr 8) and 0xFF).toByte()
                 }
                 val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
-                socket?.send(JSONObject().put("type", "input_audio_buffer.append").put("audio", b64).toString())
+                val sent = socket?.send(JSONObject().put("type", "input_audio_buffer.append").put("audio", b64).toString()) == true
+                if (sent) micBytes += n * 2L
+                val now = System.currentTimeMillis()
+                if (now - micLogAt > 5000) {
+                    micLogAt = now
+                    Logger.i(LOG_TAG, "mic ${micBytes / 2} samples sent, audio ${audioBytes / 2} samples out, speaking=$speaking")
+                }
             }
         }.also { it.isDaemon = true; it.start() }
     }
@@ -185,12 +220,21 @@ class RealtimeTranslator(
                 .setBufferSizeInBytes(maxOf(minBuf, 24_000)).setTransferMode(AudioTrack.MODE_STREAM).build()
         }.getOrNull() ?: return
         runCatching { AudioRouter.earphones(ctx)?.let { t.setPreferredDevice(it) } }
-        runCatching { t.play() }
+        val played = runCatching { t.play() }.isSuccess
+        Logger.i(LOG_TAG, "audiotrack playing=$played state=" + t.playState + " buf=" + maxOf(minBuf, 24_000))
         track = t
         playThread = Thread {
             while (running) {
-                val data = playback.poll(200, TimeUnit.MILLISECONDS) ?: continue
-                runCatching { t.write(data, 0, data.size) }
+                val data = playback.poll(200, TimeUnit.MILLISECONDS)
+                if (data == null) {
+                    // 队列空了：如果这一句已经说完，才把麦克风放回来。
+                    if (responseDone) { responseDone = false; speaking = false }
+                    continue
+                }
+                val wrote = runCatching { t.write(data, 0, data.size) }.getOrDefault(-1)
+                if (wrote < 0 && audioWarned.compareAndSet(false, true)) {
+                    Logger.w(LOG_TAG, "audiotrack write failed code=" + wrote)
+                }
             }
         }.also { it.isDaemon = true; it.start() }
     }
@@ -213,5 +257,6 @@ class RealtimeTranslator(
 
     private companion object {
         const val VOICE = "longanqian_v3.1"
+        const val LOG_TAG = "niki914_zafiro_RealtimeTranslate"
     }
 }

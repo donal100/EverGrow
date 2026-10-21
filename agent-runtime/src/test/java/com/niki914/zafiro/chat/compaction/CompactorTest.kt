@@ -110,7 +110,7 @@ class CompactorTest {
         val session = FakeSession(initialHistory)
 
         val compactor = Compactor(
-            summaryGenerator = { _, _ -> throw CancellationException("user cancelled") }
+            summaryGenerator = { _, _, _ -> throw CancellationException("user cancelled") }
         )
 
         try {
@@ -165,7 +165,7 @@ class CompactorTest {
         val session = FakeSession(initialHistory)
 
         val compactor = Compactor(
-            summaryGenerator = { _, _ -> throw IOException("503 Service Unavailable") }
+            summaryGenerator = { _, _, _ -> throw IOException("503 Service Unavailable") }
         )
 
         val result = compactor.compact(session, force = true)
@@ -185,7 +185,7 @@ class CompactorTest {
 
         var generatorCalled = false
         val compactor = Compactor(
-            summaryGenerator = { _, _ ->
+            summaryGenerator = { _, _, _ ->
                 generatorCalled = true
                 "## Goal\nSummarized via force"
             }
@@ -220,7 +220,7 @@ class CompactorTest {
 
         var generatorCalled = false
         val compactor = Compactor(
-            summaryGenerator = { _, _ ->
+            summaryGenerator = { _, _, _ ->
                 generatorCalled = true
                 "## Goal\nThreshold summarized"
             },
@@ -247,7 +247,7 @@ class CompactorTest {
 
         var generatorCalled = false
         val compactor = Compactor(
-            summaryGenerator = { _, _ ->
+            summaryGenerator = { _, _, _ ->
                 generatorCalled = true
                 "## Goal\nSummary"
             },
@@ -274,7 +274,7 @@ class CompactorTest {
 
         var generatorCalled = false
         val compactor = Compactor(
-            summaryGenerator = { _, _ ->
+            summaryGenerator = { _, _, _ ->
                 generatorCalled = true
                 "## Goal\nSummary"
             },
@@ -307,7 +307,7 @@ class CompactorTest {
 
         var capturedUserPrompt: String? = null
         val compactor = Compactor(
-            summaryGenerator = { _, userPrompt ->
+            summaryGenerator = { _, _, userPrompt ->
                 capturedUserPrompt = userPrompt
                 "## Goal\nUpdated objective"
             }

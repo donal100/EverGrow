@@ -460,6 +460,13 @@ fun HomePageContent(
     // —— 通话模式（Listen mode）：像打电话一样一直听着 ——
     // 用户说完一句 -> 走正常发消息链路 -> agent 回复 -> 念出来 -> 继续听。
     var listenMode by listenModeState
+    // 翻译有两种用法：两个人对话（外放），或单向中译英（耳机，看片/听讲座用）
+    // rememberSaveable：菜单开合或配置变化都可能重走 composition，普通 remember 会被重置成 null，
+    // 那一下 LaunchedEffect 就走 else 分支，把刚开起来的口译立刻掐掉
+    // （实测症状：toast 弹出，然后什么都没发生，socket 已经是 closed 1000）。
+    var translateMode by rememberSaveable { mutableStateOf<String?>(null) }
+    // 单人模式只出文字：这里轮询最近一条译文当字幕，省得为一个字符串再牵一条 Flow。
+    var translateCaption by remember { mutableStateOf("") }
     var pendingUtterance by remember { mutableStateOf<String?>(null) }
     val latestListenMode by rememberUpdatedState(listenMode)
     val callModeController = remember {
@@ -506,10 +513,20 @@ fun HomePageContent(
             latestViewModel.sendIntent(HomeChatIntent.Send)
         }
     }
-    LaunchedEffect(listenMode) {
-        com.niki914.zafiro.app.audio.VoiceOutbox.attach(voiceContext)
-        com.niki914.zafiro.app.audio.VoiceOutbox.enabled = listenMode
-        com.niki914.zafiro.app.audio.VoiceOutbox.beginTurn()
+    // 播报只有一个归属：agent 自己（py_speak_qwen）。
+    // app 侧的 VoiceOutbox 一律不念 —— 两套系统各自判断「该不该我说话」，
+    // 结果就是重叠、抢麦、以及那次「app 以为工具会念、工具没念」的静音。
+    // 关掉一边，问题就从「协调」变成「不存在」。
+    LaunchedEffect(listenMode, uiState.voiceMode) {
+        val outbox = com.niki914.zafiro.app.audio.VoiceOutbox
+        outbox.attach(voiceContext)
+        outbox.enabled = false
+        outbox.beginTurn()
+        Logger.i(
+            "niki914_zafiro_SpeechOwner",
+            "listenMode=" + listenMode + " voiceMode=" + uiState.voiceMode +
+                " outboxEnabled=false (agent owns speech)"
+        )
     }
 
     // 回合结束 -> 把麦克风交还通话模式。
@@ -524,10 +541,10 @@ fun HomePageContent(
             wasGenerating = uiState.isGenerating
             return@LaunchedEffect
         }
-        outbox.onSpeechIdle = { callModeController.resume() }
+        outbox.onSpeechIdle = { callModeController.micOn(); callModeController.resume() }
         // 只有「真的开始念」才静音：生成思考的那几秒仍然在听，
         // 于是用户接着说的下一句（比如「顺便八点提醒我跑步」）不会掉进空窗。
-        outbox.onSpeechStart = { }
+        outbox.onSpeechStart = { callModeController.micOff() }
         // 麦克风一直在听：把即将念出的文字交给控制器，用来丢掉「听见自己」的转写
         outbox.onSpoken = { spoken -> callModeController.noteSpoken(spoken) }
         // 只在「真的从生成中走到结束」时才恢复收音。
@@ -591,6 +608,37 @@ fun HomePageContent(
             }
         }
         voiceSpeaker.note("barge-in=" + callModeController.bargeIn)
+    }
+
+    // —— 实时翻译 ——
+    // 菜单负责开，药丸负责关：口译开着的时候药丸显示 Translate，点一下关掉。
+    LaunchedEffect(translateMode) {
+        val tr = com.niki914.zafiro.app.translate.Translator
+        val mode = translateMode
+        Logger.i("niki914_zafiro_TranslateUi", "translateMode effect fired: mode=" + mode)
+        if (mode != null) {
+            callModeController.stop()
+            listenMode = false
+            tr.startRealtime(voiceContext, mode)
+        } else {
+            tr.stop()
+        }
+    }
+
+    // 字幕只在单人模式跑：双向模式仍然出声，不需要屏幕上的文字。
+    LaunchedEffect(translateMode) {
+        val mode = translateMode
+        // 出声的双人模式（普通话）不画字幕；单人模式要字幕；
+        // 粤语双人是「文字 + 本地合成」，屏幕上顺手也画一条。
+        if (mode == null || mode == "two-way") {
+            translateCaption = ""
+            return@LaunchedEffect
+        }
+        while (true) {
+            val text = com.niki914.zafiro.app.translate.Translator.lastTranslated.trim()
+            if (text.isNotEmpty() && text != translateCaption) translateCaption = text
+            delay(400)
+        }
     }
 
     LaunchedEffect(listenMode) {
@@ -703,6 +751,90 @@ fun HomePageContent(
                             latestViewModel.sendIntent(HomeChatIntent.DismissConfigMenu)
                         }
                         latestViewModel.sendIntent(HomeChatIntent.ToggleVoiceMode)
+                    },
+                ),
+                PageChromeMenuItem(
+                    key = "translate_dialogue",
+                    title = "Two people: English ⇄ Mandarin (subtitles)",
+                    onClick = {
+                        if (latestUiState.isConfigMenuVisible) {
+                            latestViewModel.sendIntent(HomeChatIntent.DismissConfigMenu)
+                        }
+                        val granted = locationContext.checkSelfPermission(
+                            Manifest.permission.RECORD_AUDIO,
+                        ) == PackageManager.PERMISSION_GRANTED
+                        if (!granted) {
+                            Toast.makeText(locationContext, "Microphone permission needed", Toast.LENGTH_SHORT).show()
+                        } else {
+                            Logger.i("niki914_zafiro_TranslateUi", "menu pick: two-way")
+                            translateMode = "two-way"
+                            listenMode = false
+                            voiceSpeaker.stop()
+                            Toast.makeText(locationContext, "Two people: English ⇄ Mandarin", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                ),
+                PageChromeMenuItem(
+                    key = "translate_dialogue_yue",
+                    title = "Two people: English ⇄ Cantonese (subtitles)",
+                    onClick = {
+                        if (latestUiState.isConfigMenuVisible) {
+                            latestViewModel.sendIntent(HomeChatIntent.DismissConfigMenu)
+                        }
+                        val granted = locationContext.checkSelfPermission(
+                            Manifest.permission.RECORD_AUDIO,
+                        ) == PackageManager.PERMISSION_GRANTED
+                        if (!granted) {
+                            Toast.makeText(locationContext, "Microphone permission needed", Toast.LENGTH_SHORT).show()
+                        } else {
+                            Logger.i("niki914_zafiro_TranslateUi", "menu pick: two-way-yue")
+                            translateMode = "two-way-yue"
+                            listenMode = false
+                            voiceSpeaker.stop()
+                            Toast.makeText(locationContext, "Two people: English ⇄ Cantonese", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                ),
+                PageChromeMenuItem(
+                    key = "translate_cantonese",
+                    title = "Translate Cantonese → English (subtitles)",
+                    onClick = {
+                        if (latestUiState.isConfigMenuVisible) {
+                            latestViewModel.sendIntent(HomeChatIntent.DismissConfigMenu)
+                        }
+                        val granted = locationContext.checkSelfPermission(
+                            Manifest.permission.RECORD_AUDIO,
+                        ) == PackageManager.PERMISSION_GRANTED
+                        if (!granted) {
+                            Toast.makeText(locationContext, "Microphone permission needed", Toast.LENGTH_SHORT).show()
+                        } else {
+                            Logger.i("niki914_zafiro_TranslateUi", "menu pick: yue-en")
+                            translateMode = "yue-en"
+                            listenMode = false
+                            voiceSpeaker.stop()
+                            Toast.makeText(locationContext, "Cantonese → English subtitles", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                ),
+                PageChromeMenuItem(
+                    key = "translate_earpiece",
+                    title = "Translate Mandarin → English (subtitles)",
+                    onClick = {
+                        if (latestUiState.isConfigMenuVisible) {
+                            latestViewModel.sendIntent(HomeChatIntent.DismissConfigMenu)
+                        }
+                        val granted = locationContext.checkSelfPermission(
+                            Manifest.permission.RECORD_AUDIO,
+                        ) == PackageManager.PERMISSION_GRANTED
+                        if (!granted) {
+                            Toast.makeText(locationContext, "Microphone permission needed", Toast.LENGTH_SHORT).show()
+                        } else {
+                            Logger.i("niki914_zafiro_TranslateUi", "menu pick: to-english")
+                            translateMode = "to-english"
+                            listenMode = false
+                            voiceSpeaker.stop()
+                            Toast.makeText(locationContext, "Mandarin → English subtitles", Toast.LENGTH_SHORT).show()
+                        }
                     },
                 ),
                 PageChromeMenuItem(
@@ -845,12 +977,17 @@ fun HomePageContent(
             if (listenMode) callModeController.resume()
         },
         listenMode = listenMode,
+        translateMode = translateMode != null,
+        translateCaption = translateCaption,
         agentSpeaking = agentSpeaking,
         // 药丸就是一个开关：点一下关掉（并立刻静音），再点一下打开。
         // 不做「先停播再关麦」的花样 —— 用户要的是确定的行为。
         onPillTap = {
             com.niki914.zafiro.app.audio.VoiceOutbox.stop()
-            listenMode = !listenMode
+            when {
+                translateMode != null -> translateMode = null   // 翻译：点药丸即关
+                else -> listenMode = !listenMode
+            }
         },
         onToggleListenMode = {
             val next = !listenMode
@@ -858,6 +995,7 @@ fun HomePageContent(
             listenMode = next
         },
         onSendClick = {
+            com.niki914.zafiro.app.audio.VoiceOutbox.markSend()
             val query = uiState.input.trim()
             val hasAttachments =
                 uiState.pendingImages.isNotEmpty() || uiState.pendingFiles.isNotEmpty()
@@ -1182,6 +1320,8 @@ private fun HomePageContentBody(
     onToggleVoiceMode: () -> Unit = {},
     onInterruptSpeech: () -> Unit = {},
     listenMode: Boolean = false,
+    translateMode: Boolean = false,
+    translateCaption: String = "",
     onToggleListenMode: () -> Unit = {},
     agentSpeaking: Boolean = false,
     onPillTap: () -> Unit = {},
@@ -1350,6 +1490,28 @@ private fun HomePageContentBody(
             )
         }
 
+        // 单人模式的字幕条：贴在 composer 上方，读讲座/看片时眼睛有的看。
+        if (translateCaption.isNotEmpty()) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(start = 20.dp, end = 20.dp)
+                    .padding(bottom = composerBottomPadding + composerHeight.value + 12.dp),
+            ) {
+                Text(
+                    text = translateCaption,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier
+                        .background(
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            shape = RoundedCornerShape(16.dp),
+                        )
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                )
+            }
+        }
+
         CompositionLocalProvider(
             LocalScreenBackdrop provides chatBackdrop,
         ) {
@@ -1367,6 +1529,7 @@ private fun HomePageContentBody(
                 onToggleVoiceMode = onToggleVoiceMode,
                 onInterruptSpeech = onInterruptSpeech,
                 listenMode = listenMode,
+                translateMode = translateMode,
                 onToggleListenMode = onToggleListenMode,
                 agentSpeaking = agentSpeaking,
                 onPillTap = onPillTap,

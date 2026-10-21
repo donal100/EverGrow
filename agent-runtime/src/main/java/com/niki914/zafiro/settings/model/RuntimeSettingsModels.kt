@@ -204,8 +204,6 @@ data class RuntimeMcpServiceConfig(
         const val DEFAULT_HOST: String = "127.0.0.1"
 
         val DEFAULT_EXPOSED_TOOLS: Set<String> = setOf(
-            "screen_operation_accessibility",
-            "screen_operation_shell",
             "screenshot",
             "launch_app",
             "find_installed_apps",
