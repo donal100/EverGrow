@@ -111,4 +111,22 @@ object ScreenBridge {
         svc.refreshFilter()
         return "ok: packages=" + ScreenService.packages(svc).joinToString(",").ifEmpty { "ALL" }
     }
+
+    /**
+     * 用完就把自己关掉：银行类 app 检测的是「有没有无障碍服务开着」，而不是白名单，
+     * 所以借完权限必须还回去。disableSelf 不需要任何额外权限，开回来才需要用户点。
+     */
+    fun disableSelf(): String {
+        val svc = ScreenService.instance ?: return "ERR: already disabled"
+        runCatching { svc.disableSelf() }
+        return "ok: accessibility disabled"
+    }
+
+    /** 把用户送到「无障碍」设置页，让他自己打开 Evergrow 那一项。 */
+    fun openSettings(context: android.content.Context): String = runCatching {
+        val intent = android.content.Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)
+            .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+        context.startActivity(intent)
+        "ok: opened accessibility settings - enable " + context.packageName + "/.screen.ScreenService"
+    }.getOrElse { "ERR: " + it.message }
 }
