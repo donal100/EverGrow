@@ -53,32 +53,43 @@ class VoiceCallAudio(private val context: Context) {
                 .build()
             focus = req
             val granted = am.requestAudioFocus(req) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
-            am.mode = AudioManager.MODE_IN_COMMUNICATION
-            // 读回来，别相信设置成功：缺 MODIFY_AUDIO_SETTINGS 时 setMode 会被静默忽略
-            // （实测 getMode 立刻回到 0），日志却说自己设成功了 —— 那是骗自己。
-            log("enter: mode=" + am.mode + " wanted=" + AudioManager.MODE_IN_COMMUNICATION + " focus=" + granted)
+            log("enter: focus=" + granted)
 
-            if (hasHeadset()) {
-                // SCO 是耳机麦克风唯一的路；没有 BLUETOOTH_CONNECT 的话这一步会静默失效
-                runCatching { am.stopBluetoothSco() }
-                am.startBluetoothSco()
-                am.isBluetoothScoOn = true
-                // SCO 建链是异步的：放到后台线程等，绝不能在主线程 sleep（会 ANR）
-                Thread {
-                    var waited = 0
-                    while (waited < 3000 && !am.isBluetoothScoOn) {
-                        runCatching { Thread.sleep(200) }
-                        waited += 200
-                    }
-                    log("sco: on=" + am.isBluetoothScoOn + " after " + waited + "ms")
-                    log("inputs=" + devices(AudioManager.GET_DEVICES_INPUTS))
-                }.apply { isDaemon = true }.start()
-            } else {
-                am.isSpeakerphoneOn = true
-                log("no headset: speakerphone on, phone mic")
+            if (!hasHeadset()) {
+                // 没有耳机就走原来的路：手机麦克风本来就能用，通话模式只会白降音质
+                runCatching { am.isSpeakerphoneOn = true }
+                log("no headset: staying NORMAL mode, phone mic, mode=" + am.mode)
+                return@runCatching
             }
-            log("inputs=" + devices(AudioManager.GET_DEVICES_INPUTS))
-            log("outputs=" + devices(AudioManager.GET_DEVICES_OUTPUTS))
+
+            // 有耳机才尝试 SCO。关键：不要自己 setBluetoothScoOn(true) ——
+            // 那只是把标志位点亮，真链路没建起来，录音器就被指到不存在的通道上，
+            // 结果是一片静音（实测 error=7 连发十几次，用户说「什么都听不到」）。
+            // 真正的判据是输入设备列表里出现 SCO/蓝牙耳机输入。
+            runCatching { am.stopBluetoothSco() }
+            am.startBluetoothSco()
+            Thread {
+                var waited = 0
+                var scoInput: AudioDeviceInfo? = null
+                while (waited < 2000) {
+                    scoInput = am.getDevices(AudioManager.GET_DEVICES_INPUTS).firstOrNull {
+                        it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO || it.type == 26 /* BLE_HEADSET */
+                    }
+                    if (scoInput != null) break
+                    runCatching { Thread.sleep(200) }
+                    waited += 200
+                }
+                if (scoInput != null) {
+                    // 只在链路真的存在时才进通话模式
+                    am.mode = AudioManager.MODE_IN_COMMUNICATION
+                    log("sco: input=" + scoInput.productName + " after " + waited + "ms mode=" + am.mode)
+                } else {
+                    runCatching { am.stopBluetoothSco() }
+                    am.mode = AudioManager.MODE_NORMAL
+                    log("sco: unavailable after " + waited + "ms - phone mic, mode=" + am.mode)
+                }
+                log("inputs=" + devices(AudioManager.GET_DEVICES_INPUTS))
+            }.apply { isDaemon = true }.start()
         }.onFailure { log("enter failed: " + it.message) }
     }
 
