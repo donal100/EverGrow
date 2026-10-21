@@ -3,12 +3,18 @@
 > original `LICENSE` are retained unchanged.
 >
 > What this fork adds on top of upstream:
-> - **Voice in** — record with one tap, transcribe with Qwen ASR (`qwen3-asr-flash`) and send automatically
-> - **Voice out** — replies spoken through Qwen TTS (`qwen3-tts-flash`, Ethan voice) with on-device TTS as fallback
-> - **Listen mode** — continuous, phone-call-style conversation for walking or running with earphones
+> - **Voice in** — tap once, transcribe with Qwen ASR (`qwen3-asr-flash`) and send automatically
+> - **Voice out** — replies spoken with the Qwen streaming omni voice (`qwen3.5-omni-plus`), on-device TTS as fallback
+> - **Listen mode as a phone call** — continuous conversation that runs the audio stack in call mode, so the
+>   *headset* microphone is used when one is connected and the phone microphone when it isn't
+> - **Two-person interpretation** — English ⇄ Mandarin and English ⇄ Cantonese, plus one-way subtitles
+> - **Context compaction with recall** — lossy summaries over a lossless archive (`py_history_search`, `py_history_show`)
 > - **Raw GPS for the agent** — `py_gps` exposes position, accuracy, altitude, speed, bearing and satellites
 > - **News briefing skill** — Hong Kong, technology, geopolitics and Premier League, routed by language
 > - **CI baseline build** + `INJECT_EVENTS_MISSING` capability preflight + guided Android 13+ onboarding
+>
+> Design notes live in [`docs/`](docs/): [VOICE.md](docs/VOICE.md), [OFFLINE-ASR.md](docs/OFFLINE-ASR.md),
+> [GOTCHAS.md](docs/GOTCHAS.md), [BUILD.md](docs/BUILD.md).
 >
 > **Build requirements** (undocumented upstream, found the hard way): JDK 17 **and Python 3.11** —
 > Chaquopy's `installDebugPythonRequirements` task fails without a `python3.11` on PATH.
@@ -38,9 +44,14 @@ Skills, MCP, memory, native Shell and Python 3 — but you can now hold a spoken
 microphone to talk, and its answers come back in a natural cloud voice instead of text alone.
 
 The design goal is the boring-but-hard one: make the voice loop feel like a phone call rather than a walkie-talkie.
-That means the microphone closes while the reply is synthesised and spoken, the reply text is allowed to finish
-streaming before it is read aloud, and a finished turn is never replayed. Listen mode keeps the recogniser looping
-so you can ask follow-ups with your hands in your pockets.
+That means **one owner for speech** — the agent speaks, the app never does, so no reply is ever read twice — and echo
+rejected by *timestamp* rather than by comparing text, because text comparison throws away legitimate speech whenever
+you quote the agent back to itself.
+
+Listen mode goes one step further and enters Android's call audio path (`MODE_IN_COMMUNICATION` + voice-communication
+focus + SCO), which is what makes a Bluetooth headset's microphone usable at all. It only does so when a real SCO input
+device appears; otherwise it stays on the phone microphone, because guessing wrong leaves the recorder pointed at a
+channel that does not exist and the recogniser hears silence. There is a kill switch in `voice_tuning.txt`.
 
 ### Underlying agent: Zafiro
 

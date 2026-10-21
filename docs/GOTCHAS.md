@@ -66,3 +66,36 @@ package, from the same workflow. Causes, in order of subtlety:
 Always compare the signer cert of the APK you are about to hand over with the installed app's
 signer, *before* asking for the tap. That check is cheap and it is the difference between one
 install and three.
+
+## Audio mode writes are silently discarded without MODIFY_AUDIO_SETTINGS
+
+Without `<uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />` in the manifest,
+every audio-routing call fails *quietly*:
+
+```kotlin
+am.setMode(AudioManager.MODE_IN_COMMUNICATION)
+am.getMode()            // 0 — not 3
+am.setSpeakerphoneOn(true)
+am.isSpeakerphoneOn()   // false
+```
+
+Reads work, writes vanish, no exception, no log line. It is a *normal* permission, so declaring it is
+enough — no runtime prompt. `BLUETOOTH_CONNECT` is separately required (runtime, Android 12+) before
+`startBluetoothSco()` will do anything.
+
+## Never set isBluetoothScoOn by hand
+
+`setBluetoothScoOn(true)` only lights a flag; it does not create a link. If no SCO device exists, an
+`AudioRecord` created afterwards is routed to a channel that is not there and yields pure silence,
+while the recogniser reports `error=7` (`NO_MATCH`) in a loop. The user experience is "it hears
+nothing at all", which sounds like a broken microphone.
+
+Wait for a real `TYPE_BLUETOOTH_SCO` / BLE-headset **input** device in
+`getDevices(GET_DEVICES_INPUTS)` and only then enter `MODE_IN_COMMUNICATION`; otherwise stay in
+`NORMAL` and keep the phone microphone.
+
+## Log the value you read back, not the intent
+
+A log line written as `log("mode=IN_COMMUNICATION")` after `setMode(...)` is a lie waiting to happen —
+it reports what the code asked for, not what Android did. Two hours were spent trusting that line while
+the mode was still `0`. Always log `getMode()`, `isBluetoothScoOn()` and the device list.
