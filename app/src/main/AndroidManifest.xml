@@ -183,6 +183,10 @@
 
         <!-- 屏幕桥：上游把整块无障碍删掉了，这里是重建的最小实现。
              包名白名单在 filesDir/screen_packages.txt，运行时可改，不必重新授权。 -->
+        <receiver
+            android:name=".screen.ScreenCmdReceiver"
+            android:exported="false" />
+
         <service
             android:name=".screen.ScreenService"
             android:exported="true"
