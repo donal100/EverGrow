@@ -72,6 +72,7 @@ class App : Application() {
         // 非主进程（目前只有 `:python`）不初始化主进程状态：上下文与持久化只属于主进程
         //（否则 ContextProvider 从未 provide，PyRuntime.warmUp 会永远挂起）
         if (!isMainProcess()) return
+        resetAudioRouteAtStartup()
         ContextProvider.provide(applicationContext)
         XRepo.init(this.applicationContext)
         ConversationRepo.init(this.applicationContext)
@@ -189,4 +190,22 @@ class App : Application() {
         return name == null || name == packageName
     }
 
+    /**
+     * 播报被打断（崩溃、强停、通话模式没走完 exit）会把音频模式留在
+     * MODE_IN_COMMUNICATION，之后所有声音都走通话音质、听起来又小又闷 ——
+     * 实测发生过一次，setMode(NORMAL) 从 Python 侧改不动，只能进程重来时复位。
+     * 所以每次主进程启动都先归位：没有通话在进行时，NORMAL 就是正确状态。
+     */
+    private fun resetAudioRouteAtStartup() {
+        runCatching {
+            val am = getSystemService(android.content.Context.AUDIO_SERVICE) as android.media.AudioManager
+            if (am.getMode() != android.media.AudioManager.MODE_NORMAL) {
+                am.stopBluetoothSco()
+                am.setBluetoothScoOn(false)
+                am.setSpeakerphoneOn(false)
+                am.setMode(android.media.AudioManager.MODE_NORMAL)
+                Logger.i("niki914_zafiro_AudioReset", "reset audio mode to NORMAL (was " + am.getMode() + ")")
+            }
+        }
+    }
 }
