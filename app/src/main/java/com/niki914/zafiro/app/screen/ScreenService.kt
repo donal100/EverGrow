@@ -16,12 +16,56 @@ import java.io.File
  */
 class ScreenService : AccessibilityService() {
 
+    private val main = android.os.Handler(android.os.Looper.getMainLooper())
+    private var ttlRunnable: Runnable? = null
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
         refreshFilter()
         log("connected; packages=" + ScreenService.packages(this).joinToString(",").ifEmpty { "ALL" })
+        armTtl()
     }
+
+    /**
+     * 权限是借的，要自己还。开启后最多留 ttlMinutes() 分钟，到点自己关掉 ——
+     * 银行类 app 检测的是「有没有无障碍在开着」，忘了关就等于把它们锁死。
+     * 时长写在 filesDir/screen_ttl_minutes.txt，默认 60；0 = 不自动关。
+     */
+    private fun armTtl() {
+        val minutes = ttlMinutes()
+        if (minutes <= 0) {
+            log("ttl: disabled by config")
+            return
+        }
+        val stamp = File(filesDir, STAMP)
+        val enabledAt = runCatching { stamp.readText().trim().toLong() }.getOrDefault(0L)
+        val now = System.currentTimeMillis()
+        // 上次开启到现在已经超时（进程被杀过、手机重启过）：立刻还回去
+        if (enabledAt > 0 && now - enabledAt > minutes * 60_000L) {
+            log("ttl: expired (" + ((now - enabledAt) / 60_000) + " min) - disabling")
+            runCatching { stamp.writeText("") }
+            disableSelf()
+            return
+        }
+        if (enabledAt == 0L) runCatching { stamp.writeText(now.toString()) }
+        val left = (minutes * 60_000L) - (now - (if (enabledAt > 0) enabledAt else now))
+        ttlRunnable?.let { main.removeCallbacks(it) }
+        val r = Runnable {
+            log("ttl: reached " + minutes + " min - disabling")
+            runCatching { stamp.writeText("") }
+            disableSelf()
+        }
+        ttlRunnable = r
+        main.postDelayed(r, left.coerceAtLeast(1_000L))
+        log("ttl: will disable in " + (left / 60_000) + " min")
+    }
+
+    private fun ttlMinutes(): Int = runCatching {
+        val f = File(filesDir, TTL_FILE)
+        if (!f.isFile) return@runCatching 60
+        f.readText().trim().toIntOrNull() ?: 60
+    }.getOrDefault(60)
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         // 只用来知道前台是谁；真正读树是按需 pull，不在这里做重活
@@ -31,6 +75,8 @@ class ScreenService : AccessibilityService() {
     override fun onInterrupt() {}
 
     override fun onDestroy() {
+        ttlRunnable?.let { main.removeCallbacks(it) }
+        ttlRunnable = null
         if (instance === this) instance = null
         log("destroyed")
         super.onDestroy()
@@ -57,6 +103,8 @@ class ScreenService : AccessibilityService() {
 
     companion object {
         const val WHITELIST = "screen_packages.txt"
+        const val TTL_FILE = "screen_ttl_minutes.txt"
+        const val STAMP = "screen_enabled_at.txt"
 
         @Volatile
         var instance: ScreenService? = null
