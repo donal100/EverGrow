@@ -37,6 +37,9 @@ class CallModeController(
     var bargeIn = false
     var onBargeIn: (() -> Boolean)? = null
 
+    /** 把听写走成「一通电话」：通话模式 + 语音焦点 + SCO，耳机麦克风才可用。 */
+    private val callAudio by lazy { VoiceCallAudio(context) }
+
     fun start() {
         // 上一次会话可能留下静音状态和半开的播报窗口，进来先清掉
         ListenBus.setMuted(false)
@@ -75,6 +78,8 @@ class CallModeController(
                 VoiceOutbox.stop()
             }
         }
+        // 先切音频模式，再起服务：录音器启动时路由必须已经就位
+        callAudio.enter()
         val intent = Intent(context, ListenService::class.java).setAction(ListenService.ACTION_START)
         runCatching { ContextCompat.startForegroundService(context, intent) }
     }
@@ -82,6 +87,7 @@ class CallModeController(
     fun stop() {
         ListenBus.onSentence = null
         ListenBus.onSpeechStart = null
+        callAudio.exit()
         runCatching { context.stopService(Intent(context, ListenService::class.java)) }
     }
 

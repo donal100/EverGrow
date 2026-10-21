@@ -64,6 +64,23 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * 问一次 BLUETOOTH_CONNECT。没有它，通话模式下的 startBluetoothSco 是静默空转，
+     * 耳机麦克风永远拿不到 —— 实测 WhatsApp 能拿到耳机麦、我们拿不到，差别就在这个权限。
+     */
+    private fun askBluetoothConnectOnce() {
+        if (android.os.Build.VERSION.SDK_INT < 31) return
+        runCatching {
+            val perm = android.Manifest.permission.BLUETOOTH_CONNECT
+            if (checkSelfPermission(perm) == android.content.pm.PackageManager.PERMISSION_GRANTED) return
+            val prefs = getSharedPreferences("zafiro_app", android.content.Context.MODE_PRIVATE)
+            if (prefs.getBoolean("bt_connect_prompted", false)) return
+            prefs.edit().putBoolean("bt_connect_prompted", true).apply()
+            requestPermissions(arrayOf(perm), 4101)
+            Logger.i("niki914_zafiro_BtAudio", "asked for BLUETOOTH_CONNECT")
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -74,6 +91,7 @@ class MainActivity : AppCompatActivity() {
         // 通话模式要在后台一直听；系统掐后台时它会静默变聋。
         // 豁免只能由用户确认（没有静默授予的 API），所以开机问一次、记住不再骚扰。
         askIgnoreBatteryOptimizationOnce()
+        askBluetoothConnectOnce()
         // 每次冷启动都重排一次闹钟：更新、强停、系统清理都可能把已排的提醒弄丢，
         // 而用户预期「设过的事一定响」。
         runCatching { com.niki914.zafiro.app.schedule.ScheduleStore.rearmAll(applicationContext) }
