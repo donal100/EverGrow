@@ -115,12 +115,14 @@ Zafiro is an open-source intelligent Agent running on Android devices, with [BYO
 
 ## Voice Assistant Takeover
 
-Through the [LSPosed](https://github.com/lsposed/lsposed) framework, Zafiro can take over your system voice assistant — wake Breeno or XiaoAi, and the one actually answering is your own Agent. You can decide, based on keywords, which requests go to Zafiro and which pass through to the native assistant. After takeover, the assistant retains full Agent capabilities including device control.
+Inherited from upstream: through the [LSPosed](https://github.com/lsposed/lsposed) framework, the app can take over
+your system voice assistant — wake Breeno or XiaoAi, and the one actually answering is your own agent. You can decide, based on keywords, which requests go to Zafiro and which pass through to the native assistant. After takeover, the assistant retains full Agent capabilities including device control.
 
 > [!NOTE]
 > Taking over the system voice assistant requires **Root + LSPosed**, and currently supports: OPPO - Breeno
 >
-> Voice takeover availability may be affected by phone model, system version, voice assistant version, and vendor system restrictions. When your device does not yet support system assistant takeover, you can still use Zafiro's chat interface with all Agent capabilities.
+> Voice takeover availability may be affected by phone model, system version, voice assistant version, and vendor system restrictions. When your device does not yet support system assistant takeover — as on the Xiaomi this fork is developed against — the
+voice path is Evergrow's own listen mode, which needs neither Root nor LSPosed.
 
 <details>
 <summary>Demos</summary>
@@ -228,7 +230,7 @@ Pull requests are welcome!
 - [GitHub Issues](https://github.com/niki914/zafiro/issues) — report bugs or request features
 - [Afdian](https://afdian.com/a/niki914) — support the developer
 
-When reporting an issue, please include as much detail as possible: phone model and Android version, system voice assistant and its version, Zafiro version, steps to reproduce, and screenshots or screen recordings.
+When reporting an issue, please include as much detail as possible: phone model and Android version, system voice assistant and its version, Evergrow version, steps to reproduce, and screenshots or screen recordings.
 
 ## License
 
