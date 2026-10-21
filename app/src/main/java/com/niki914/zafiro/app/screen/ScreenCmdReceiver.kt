@@ -52,6 +52,14 @@ class ScreenCmdReceiver : BroadcastReceiver() {
             "status" -> "ready=" + ScreenBridge.ready() + " foreground=" + ScreenBridge.foreground() +
                 " whitelist=" + ScreenService.packages(app).joinToString(",").ifEmpty { "ALL" }
             "packages" -> ScreenBridge.setPackages(cmd.optString("packages", ""))
+            "swipe" -> ScreenBridge.swipe(
+                cmd.optInt("x1", 600), cmd.optInt("y1", 1900),
+                cmd.optInt("x2", 600), cmd.optInt("y2", 700),
+                cmd.optLong("ms", 320L),
+            )
+            "down" -> ScreenBridge.scrollDown()
+            "up" -> ScreenBridge.scrollUp()
+            "tapxy" -> ScreenBridge.tapXY(cmd.optInt("x", 600), cmd.optInt("y", 1200))
             "off" -> ScreenBridge.disableSelf()
             "enable" -> ScreenBridge.openSettings(app)
             else -> "ERR: unknown op " + op

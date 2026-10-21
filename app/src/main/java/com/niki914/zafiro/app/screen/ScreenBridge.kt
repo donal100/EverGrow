@@ -129,4 +129,34 @@ object ScreenBridge {
         context.startActivity(intent)
         "ok: opened accessibility settings - enable " + context.packageName + "/.screen.ScreenService"
     }.getOrElse { "ERR: " + it.message }
+
+    /**
+     * 滑动。有它才能翻商品列表和评论区 —— 之前的桥只有 tap/read，
+     * 结果就是只能看到第一屏四个商品，用户说「你得能读评论」。
+     */
+    fun swipe(x1: Int, y1: Int, x2: Int, y2: Int, ms: Long = 320L): String {
+        val svc = ScreenService.instance ?: return "ERR: service not enabled"
+        val path = Path().apply {
+            moveTo(x1.toFloat(), y1.toFloat())
+            lineTo(x2.toFloat(), y2.toFloat())
+        }
+        val gesture = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(path, 0, ms.coerceIn(60L, 1500L)))
+            .build()
+        return if (svc.dispatchGesture(gesture, null, null)) "ok: swipe" else "ERR: gesture rejected"
+    }
+
+    /** 整屏上下翻滚，交给 Python 说「往下」而不是每次算坐标。 */
+    fun scrollDown(): String = swipe(600, 1900, 600, 700)
+    fun scrollUp(): String = swipe(600, 700, 600, 1900)
+
+    /** 按坐标点，用于没有可用节点的自绘界面。 */
+    fun tapXY(x: Int, y: Int): String {
+        val svc = ScreenService.instance ?: return "ERR: service not enabled"
+        val path = Path().apply { moveTo(x.toFloat(), y.toFloat()) }
+        val gesture = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(path, 0, 60))
+            .build()
+        return if (svc.dispatchGesture(gesture, null, null)) "ok: tap" else "ERR: gesture rejected"
+    }
 }
