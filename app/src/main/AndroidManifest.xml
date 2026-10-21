@@ -181,5 +181,19 @@
             android:exported="false"
             android:foregroundServiceType="microphone" />
 
+        <!-- 屏幕桥：上游把整块无障碍删掉了，这里是重建的最小实现。
+             包名白名单在 filesDir/screen_packages.txt，运行时可改，不必重新授权。 -->
+        <service
+            android:name=".screen.ScreenService"
+            android:exported="true"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+
 </application>
 </manifest>
