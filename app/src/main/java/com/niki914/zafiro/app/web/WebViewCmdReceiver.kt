@@ -45,6 +45,13 @@ class WebViewCmdReceiver : BroadcastReceiver() {
                 app, url, cmd.optString("js", ""), timeout, cmd.optLong("delay_ms", 0L),
             )
             "js" -> WebEngine.evalJs(app, cmd.optString("js", ""), timeout)
+            "open" -> {
+                val i = Intent(app, WebLoginActivity::class.java)
+                    .putExtra(WebLoginActivity.EXTRA_URL, url)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                app.startActivity(i)
+                "ok: opened login window"
+            }
             "cookies" -> WebEngine.cookies(url)
             "setcookie" -> WebEngine.setCookie(url, cmd.optString("cookie", ""))
             "savecookies" -> WebEngine.saveCookies(app, url, cmd.optString("path", "webview_cookies.txt"))
