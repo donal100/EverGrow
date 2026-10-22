@@ -101,4 +101,24 @@ object WebEngine {
         java.io.File(ctx.filesDir, path).writeText(c)
         "ok: " + c.split(";").size + " cookies -> " + path
     }.getOrElse { "ERR: " + it.message }
+
+    /** 在当前页面上跑一段 js（不重新载入）。用来点按钮、读当前状态。 */
+    fun evalJs(ctx: Context, js: String, timeoutMs: Long): String {
+        val latch = CountDownLatch(1)
+        val out = arrayOf("ERR: timeout")
+        main.post {
+            runCatching {
+                val w = web ?: throw IllegalStateException("no page loaded yet - fetch first")
+                w.evaluateJavascript(js) { value ->
+                    out[0] = value ?: ""
+                    latch.countDown()
+                }
+            }.onFailure {
+                out[0] = "ERR: " + it.message
+                latch.countDown()
+            }
+        }
+        latch.await(timeoutMs, TimeUnit.MILLISECONDS)
+        return out[0]
+    }
 }

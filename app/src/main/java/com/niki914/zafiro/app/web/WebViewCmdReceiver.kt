@@ -44,6 +44,7 @@ class WebViewCmdReceiver : BroadcastReceiver() {
             "fetch" -> WebEngine.load(
                 app, url, cmd.optString("js", ""), timeout, cmd.optLong("delay_ms", 0L),
             )
+            "js" -> WebEngine.evalJs(app, cmd.optString("js", ""), timeout)
             "cookies" -> WebEngine.cookies(url)
             "setcookie" -> WebEngine.setCookie(url, cmd.optString("cookie", ""))
             "savecookies" -> WebEngine.saveCookies(app, url, cmd.optString("path", "webview_cookies.txt"))
