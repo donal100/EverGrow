@@ -50,7 +50,7 @@ object WebEngine {
      * 载入 url，等 onPageFinished，然后（可选）执行 js 取结果。
      * js 为空时抓 document.body.innerText。
      */
-    fun load(ctx: Context, url: String, js: String?, timeoutMs: Long): String {
+    fun load(ctx: Context, url: String, js: String?, timeoutMs: Long, delayMs: Long = 0L): String {
         val latch = CountDownLatch(1)
         val out = arrayOf("ERR: timeout")
         main.post {
@@ -60,10 +60,15 @@ object WebEngine {
                     override fun onPageFinished(view: WebView, u: String) {
                         val script = js?.takeIf { it.isNotBlank() }
                             ?: "document.body ? document.body.innerText : ''"
-                        view.evaluateJavascript(script) { value ->
-                            out[0] = value ?: ""
-                            latch.countDown()
+                        // 单页应用在 onPageFinished 之后才渲染，立刻取文本只会拿到空字符串
+                        //（实测 account.scmp.com/login 返回 ""）。等一会儿再取值。
+                        val grab = Runnable {
+                            view.evaluateJavascript(script) { value ->
+                                out[0] = value ?: ""
+                                latch.countDown()
+                            }
                         }
+                        if (delayMs > 0L) main.postDelayed(grab, delayMs) else grab.run()
                     }
                 }
                 w.loadUrl(url)

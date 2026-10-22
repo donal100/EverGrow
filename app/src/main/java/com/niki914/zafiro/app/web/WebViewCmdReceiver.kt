@@ -41,7 +41,9 @@ class WebViewCmdReceiver : BroadcastReceiver() {
         val url = cmd.optString("url", "")
         val timeout = cmd.optLong("timeout_ms", 30_000L)
         val out = when (op) {
-            "fetch" -> WebEngine.load(app, url, cmd.optString("js", ""), timeout)
+            "fetch" -> WebEngine.load(
+                app, url, cmd.optString("js", ""), timeout, cmd.optLong("delay_ms", 0L),
+            )
             "cookies" -> WebEngine.cookies(url)
             "setcookie" -> WebEngine.setCookie(url, cmd.optString("cookie", ""))
             "savecookies" -> WebEngine.saveCookies(app, url, cmd.optString("path", "webview_cookies.txt"))
