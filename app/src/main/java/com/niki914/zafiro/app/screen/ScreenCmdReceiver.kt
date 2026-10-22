@@ -60,6 +60,7 @@ class ScreenCmdReceiver : BroadcastReceiver() {
             "down" -> ScreenBridge.scrollDown()
             "up" -> ScreenBridge.scrollUp()
             "tapxy" -> ScreenBridge.tapXY(cmd.optInt("x", 600), cmd.optInt("y", 1200))
+            "shot" -> ScreenBridge.shot(app, cmd.optString("name", "screen_shot.png"))
             "off" -> ScreenBridge.disableSelf()
             "enable" -> ScreenBridge.openSettings(app)
             else -> "ERR: unknown op " + op

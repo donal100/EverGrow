@@ -159,4 +159,56 @@ object ScreenBridge {
             .build()
         return if (svc.dispatchGesture(gesture, null, null)) "ok: tap" else "ERR: gesture rejected"
     }
+
+    /**
+     * 截屏。自绘界面（淘宝的规格面板、购物车）在无障碍树里是空的，
+     * 只有拿到像素才能判断按钮在哪，再用 tapXY 点下去。
+     * API 30+ 的 AccessibilityService.takeScreenshot，配置里已经声明了 canTakeScreenshot。
+     */
+    fun shot(ctx: android.content.Context, name: String = "screen_shot.png"): String {
+        val svc = ScreenService.instance ?: return "ERR: service not enabled"
+        val latch = java.util.concurrent.CountDownLatch(1)
+        val out = arrayOf("ERR: timeout")
+        val file = java.io.File(ctx.filesDir, name)
+        val executor = java.util.concurrent.Executors.newSingleThreadExecutor()
+        runCatching {
+            svc.takeScreenshot(
+                android.view.Display.DEFAULT_DISPLAY,
+                executor,
+                object : android.accessibilityservice.AccessibilityService.TakeScreenshotCallback {
+                    override fun onSuccess(
+                        result: android.accessibilityservice.AccessibilityService.ScreenshotResult,
+                    ) {
+                        runCatching {
+                            val hw = android.graphics.Bitmap.wrapHardwareBuffer(
+                                result.hardwareBuffer, result.colorSpace,
+                            )
+                            val soft = hw?.copy(android.graphics.Bitmap.Config.ARGB_8888, false)
+                            java.io.FileOutputStream(file).use { fos ->
+                                soft?.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, fos)
+                            }
+                            val w = soft?.width ?: 0
+                            val h = soft?.height ?: 0
+                            soft?.recycle()
+                            hw?.recycle()
+                            runCatching { result.hardwareBuffer.close() }
+                            out[0] = "ok: " + file.absolutePath + " " + w + "x" + h
+                        }.onFailure { out[0] = "ERR: " + it.message }
+                        latch.countDown()
+                    }
+
+                    override fun onFailure(errorCode: Int) {
+                        out[0] = "ERR: screenshot failed code=" + errorCode
+                        latch.countDown()
+                    }
+                },
+            )
+        }.onFailure {
+            out[0] = "ERR: " + it.message
+            latch.countDown()
+        }
+        latch.await(10, java.util.concurrent.TimeUnit.SECONDS)
+        runCatching { executor.shutdown() }
+        return out[0]
+    }
 }
