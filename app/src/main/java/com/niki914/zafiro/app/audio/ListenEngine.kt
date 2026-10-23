@@ -63,6 +63,8 @@ class ListenEngine(
     private var currentPartial = ""
     private var lastFinal = ""
 
+    private var routeWatch: Thread? = null
+
     fun start() {
         if (active) return
         active = true
@@ -74,10 +76,13 @@ class ListenEngine(
         recorder.start()
         startWriter()
         main.post { openSession() }
+        startRouteWatch()
     }
 
     fun stop() {
         active = false
+        routeWatch?.interrupt()
+        routeWatch = null
         recorder.onSamples = null
         recorder.stop()
         writer?.interrupt()
@@ -272,6 +277,41 @@ class ListenEngine(
     private fun minGateMs(): Long = tuningValue("gate_min_ms")?.toLongOrNull() ?: 400L
 
     private fun minGateWords(): Int = tuningValue("gate_min_words")?.toIntOrNull() ?: 2
+
+    /**
+     * 输入路由看门狗（观察模式）。
+     *
+     * 实测：听写进行中把耳机拿走/断开，音频路由会变，但识别器还在往旧管道喂音频，
+     * 结果是一分钟 65 次 session open、32 次 error=11、31 次 error=7 —— 听写假死。
+     *
+     * 这一版**只观察**：每 2 秒比对输入设备签名，变了就写一行 route: 日志，
+     * 说明切换到了什么、以及将来会怎么恢复。不做任何重启，交付路径完全不变。
+     * 等日志证明判据可靠后，再用 route_watch=enforce 打开真正的恢复动作。
+     */
+    private fun startRouteWatch() {
+        if (routeWatch != null) return
+        routeWatch = Thread {
+            var last = routeSignature()
+            log("route: watch start " + last)
+            while (active) {
+                runCatching { Thread.sleep(2000) }
+                if (!active) break
+                val now = routeSignature()
+                if (now != last) {
+                    log("route: changed " + last + " -> " + now + " (would restart session)")
+                    last = now
+                }
+            }
+        }.apply { isDaemon = true; name = "route-watch" }
+        routeWatch?.start()
+    }
+
+    /** 当前输入设备的签名：id + 类型，顺序稳定。变了就说明路由换了。 */
+    private fun routeSignature(): String = runCatching {
+        val am = context.getSystemService(android.content.Context.AUDIO_SERVICE) as android.media.AudioManager
+        am.getDevices(android.media.AudioManager.GET_DEVICES_INPUTS)
+            .joinToString(",") { it.id.toString() + ":" + it.type }
+    }.getOrDefault("?")
 
     private fun log(msg: String) {
         runCatching {
