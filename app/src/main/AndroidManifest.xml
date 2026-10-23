@@ -185,8 +185,17 @@
              包名白名单在 filesDir/screen_packages.txt，运行时可改，不必重新授权。 -->
         <activity
             android:name=".web.WebLoginActivity"
-            android:exported="false"
-            android:theme="@android:style/Theme.Material.Light.NoActionBar" />
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:theme="@android:style/Theme.Material.Light.NoActionBar">
+            <!-- OAuth 回调入口（RFC 8252）：浏览器授权完成后回到 evergrow://oauth?code=… -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="evergrow" android:host="oauth" />
+            </intent-filter>
+        </activity>
 
         <receiver
             android:name=".web.WebViewCmdReceiver"

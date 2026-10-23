@@ -24,6 +24,15 @@ class WebLoginActivity : Activity() {
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // OAuth 回调：浏览器把 evergrow://oauth?code=… 交回这里，落盘后立刻退出。
+        // 这是 RFC 8252 要求的做法——授权走系统浏览器，回调走自定义 scheme，
+        // 授权码不经过任何 WebView。
+        val data = intent?.data
+        if (data != null && data.scheme == "evergrow" && data.host == "oauth") {
+            writeRedirect(data.toString())
+            finish()
+            return
+        }
         val url = intent?.getStringExtra(EXTRA_URL) ?: "https://account.scmp.com/login"
         val w = WebView(this)
         w.settings.javaScriptEnabled = true
@@ -58,6 +67,23 @@ class WebLoginActivity : Activity() {
         web?.destroy()
         web = null
         super.onDestroy()
+    }
+
+    private fun writeRedirect(uri: String) {
+        runCatching {
+            val obj = org.json.JSONObject()
+            obj.put("uri", uri)
+            obj.put("at", System.currentTimeMillis())
+            val q = uri.substringAfter('?', "")
+            q.split('&').forEach { pair ->
+                if (pair.contains('=')) {
+                    val k = pair.substringBefore('=')
+                    val v = java.net.URLDecoder.decode(pair.substringAfter('='), "UTF-8")
+                    obj.put(k, v)
+                }
+            }
+            java.io.File(filesDir, "oauth_redirect.json").writeText(obj.toString())
+        }
     }
 
     companion object {
