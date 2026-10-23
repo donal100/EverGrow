@@ -57,6 +57,9 @@ class ListenEngine(
     private var pfdRead: ParcelFileDescriptor? = null
     private var pfdWrite: ParcelFileDescriptor? = null
     private var writer: Thread? = null
+    // 噪声闸门的计时：只用于观察，默认不改变任何交付行为
+    private var speechBeginAt = 0L
+    private var speechEndAt = 0L
     private var currentPartial = ""
     private var lastFinal = ""
 
@@ -173,10 +176,16 @@ class ListenEngine(
 
     private val listener = object : RecognitionListener {
         override fun onReadyForSpeech(params: Bundle?) {}
-        override fun onBeginningOfSpeech() { log("speech begins") }
+        override fun onBeginningOfSpeech() {
+            speechBeginAt = System.currentTimeMillis()
+            log("speech begins")
+        }
         override fun onRmsChanged(rmsdB: Float) {}
         override fun onBufferReceived(buffer: ByteArray?) {}
-        override fun onEndOfSpeech() { log("speech ends") }
+        override fun onEndOfSpeech() {
+            speechEndAt = System.currentTimeMillis()
+            log("speech ends")
+        }
         override fun onEvent(eventType: Int, params: Bundle?) {}
 
         override fun onError(error: Int) {
@@ -199,7 +208,13 @@ class ListenEngine(
             if (t.length >= 2 && t != lastFinal) {
                 lastFinal = t
                 log("sentence: " + t.take(70))
-                onSentence(t)
+                // 噪声闸门：先只观察。默认 gate_enforce=0 —— 交付路径与以前完全一致，
+                // 只有把 gate_enforce=1 写进 voice_tuning.txt 才会真的丢弃。
+                if (noteGate(t)) {
+                    log("gate: dropped")
+                } else {
+                    onSentence(t)
+                }
             }
             // 关键：一条会话只交付一句话，随后就自己关掉了。
             // 之前没有重开，于是「第二句永远听不到」——日志里只有第一次的 session open。
@@ -223,6 +238,40 @@ class ListenEngine(
         pfdRead = null
         pfdWrite = null
     }
+
+    /**
+     * 判断一条识别结果是否像噪声（默认只看不丢）。
+     * 判据只基于识别器自己给出的时间戳和文字，不碰音频链路、不碰会话生命周期：
+     *   - 语音段太短（默认 < 400 ms）：白噪声、咳嗽、椅子响
+     *   - 词太少（< 2 词且 < 5 字）：一段杂音被凑成一个词
+     * 单字回复（yes/no/ok/stop/hey）在白名单，不会被短判据误杀。
+     * 只有 voice_tuning.txt 里 gate_enforce=1 时才真的丢弃。
+     */
+    private fun noteGate(text: String): Boolean {
+        val begin = speechBeginAt
+        val end = speechEndAt
+        val dur = if (begin > 0L && end > begin) end - begin else -1L
+        val trim = text.trim()
+        val words = if (trim.isEmpty()) 0 else trim.split(Regex("\\s+")).size
+        val shortReply = trim.lowercase() in setOf("yes", "no", "ok", "okay", "stop", "hey")
+        val tooShort = dur in 0..minGateMs()
+        val tooFew = words < minGateWords() && trim.length < 5 && !shortReply
+        val suspect = tooShort || tooFew
+        log("gate: dur=" + dur + "ms words=" + words + " suspect=" + suspect + " text=" + trim.take(30))
+        return suspect && gateEnforce()
+    }
+
+    private fun tuningValue(key: String): String? = runCatching {
+        val f = File(context.filesDir, "voice_tuning.txt")
+        if (!f.isFile) return@runCatching null
+        f.readLines().firstOrNull { it.trim().startsWith("$key=") }?.substringAfter("=")?.trim()
+    }.getOrNull()
+
+    private fun gateEnforce(): Boolean = tuningValue("gate_enforce") == "1"
+
+    private fun minGateMs(): Long = tuningValue("gate_min_ms")?.toLongOrNull() ?: 400L
+
+    private fun minGateWords(): Int = tuningValue("gate_min_words")?.toIntOrNull() ?: 2
 
     private fun log(msg: String) {
         runCatching {
