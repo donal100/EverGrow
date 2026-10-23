@@ -281,12 +281,12 @@ class ListenEngine(
     /**
      * 句末停顿的延长期（毫秒）。识别器自己判完一句就交付，用户中途换气、想事
      * 都会被当成「说完了」。这里把交付往后推 holdMs()：这期间又来一句就并成一
-     * 句，等真正安静下来再交给 agent。默认 1800ms，正好把停顿翻倍。
+     * 句，等真正安静下来再交给 agent。默认 900ms：够想一个词，又不至于让人等。
      */
     @Volatile private var holdSeq = 0
     private val pendingText = StringBuilder()
 
-    private fun holdMs(): Long = tuningValue("endpoint_hold_ms")?.toLongOrNull() ?: 1800L
+    private fun holdMs(): Long = tuningValue("endpoint_hold_ms")?.toLongOrNull() ?: 900L
 
     private fun holdSentence(t: String) {
         val text = t.trim()
