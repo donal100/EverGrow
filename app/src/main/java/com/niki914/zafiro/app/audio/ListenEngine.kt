@@ -218,7 +218,7 @@ class ListenEngine(
                 if (noteGate(t)) {
                     log("gate: dropped")
                 } else {
-                    onSentence(t)
+                    holdSentence(t)
                 }
             }
             // 关键：一条会话只交付一句话，随后就自己关掉了。
@@ -277,6 +277,33 @@ class ListenEngine(
     private fun minGateMs(): Long = tuningValue("gate_min_ms")?.toLongOrNull() ?: 400L
 
     private fun minGateWords(): Int = tuningValue("gate_min_words")?.toIntOrNull() ?: 2
+
+    /**
+     * 句末停顿的延长期（毫秒）。识别器自己判完一句就交付，用户中途换气、想事
+     * 都会被当成「说完了」。这里把交付往后推 holdMs()：这期间又来一句就并成一
+     * 句，等真正安静下来再交给 agent。默认 1800ms，正好把停顿翻倍。
+     */
+    @Volatile private var holdSeq = 0
+    private val pendingText = StringBuilder()
+
+    private fun holdMs(): Long = tuningValue("endpoint_hold_ms")?.toLongOrNull() ?: 1800L
+
+    private fun holdSentence(t: String) {
+        val text = t.trim()
+        if (text.isEmpty()) return
+        pendingText.append(if (pendingText.isEmpty()) text else " " + text)
+        val seq = ++holdSeq
+        val wait = holdMs()
+        log("hold: wait=" + wait + "ms pending=" + pendingText.length)
+        main.postDelayed({
+            if (!active || seq != holdSeq) return@postDelayed
+            val merged = pendingText.toString().trim()
+            pendingText.setLength(0)
+            if (merged.isEmpty()) return@postDelayed
+            log("hold: release " + merged.take(60))
+            onSentence(merged)
+        }, wait)
+    }
 
     /**
      * 输入路由看门狗（观察模式）。
