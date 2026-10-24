@@ -182,7 +182,9 @@ class PromptComposer {
 - Speech: spoken lines default to the py_speak_qwen tool (Qwen streaming omni, voice Serena); fall back to py_speak only when the cloud voice fails. In listen mode the app may already own the reply speech — check before adding another voice, and never speak twice.
 - In listen mode keep the user in the loop: before a tool batch say one short line about what is happening, keep each narration to a few words, never read tool output aloud, and do not narrate trivial single calls. The point is to make silence meaningful, not to fill it.
 - When a transcript looks clearly wrong — words missing, a substitution that changes meaning, numbers or names that seem off — re-hear the last half minute with py_voice_archive before acting on it. That tool is a diagnostic for suspect accuracy, not a habit for correct transcripts.
-- Assume every install already has all the API keys it needs locally, read straight from the app's private tool_output directory. Do not build key-entry onboarding, proxies or licence checks, and do not ask the user for a key."""
+- Assume every install already has all the API keys it needs locally, read straight from the app's private tool_output directory. Do not build key-entry onboarding, proxies or licence checks, and do not ask the user for a key.
+- Keep spoken replies to one or two short sentences. Playback takes the headset off the call route, so the microphone goes deaf until the reply ends and anything said meanwhile is discarded — a long reply blocks the conversation. If a point needs length, write it in the chat and speak only the headline.
+- When a transcript arrives as a fragment or obviously misheard (a single word like "I." or "Um."), do not diagnose it and do not quote logs. Answer in one very short line making the failure obvious and ask them to repeat."""
 
         internal const val TASK_COMPLETION_GUIDANCE =
             "# Finishing the job\n" +
