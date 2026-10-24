@@ -34,11 +34,28 @@ class ThinkingTicker(private val context: Context) {
     private val tick = object : Runnable {
         override fun run() {
             if (!running) return
+            // 我一开始说话就停：py 播报走的是另一条路径，不会调用 micOff，
+            // 所以这里自己看 speech_window.txt（py_speak* 播放前会写它）。
+            if (ownVoicePlaying()) { log("tick stop: our voice started"); stop(); return }
             if (System.currentTimeMillis() - startedAt > MAX_MS) { stop(); return }
             play(beepLow)
             main.postDelayed(this, intervalMs())
         }
     }
+
+    /** py 播报工具写的「我正在出声」时间窗；窗口内就别再嘀了。 */
+    private fun ownVoicePlaying(): Boolean = runCatching {
+        val f = File(context.filesDir, "speech_window.txt")
+        if (!f.isFile) return@runCatching false
+        val parts = f.readText().trim().split(Regex("\\s+"))
+        if (parts.size < 2) return@runCatching false
+        val start = parts[0].toLongOrNull() ?: return@runCatching false
+        val end = parts[1].toLongOrNull() ?: 0L
+        val now = System.currentTimeMillis()
+        if (now - start > 120_000L) return@runCatching false
+        if (end == 0L) return@runCatching (now - start) < 20_000L
+        now in start..(end + 2_500L)
+    }.getOrDefault(false)
 
     fun acknowledge() {
         if (!enabled()) return
@@ -137,6 +154,6 @@ class ThinkingTicker(private val context: Context) {
     private companion object {
         const val RATE = 24_000
         const val AMPLITUDE = 9000.0
-        const val MAX_MS = 40_000L
+        const val MAX_MS = 20_000L
     }
 }
