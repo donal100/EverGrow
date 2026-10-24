@@ -40,6 +40,9 @@ class CallModeController(
     /** 把听写走成「一通电话」：通话模式 + 语音焦点 + SCO，耳机麦克风才可用。 */
     private val callAudio by lazy { VoiceCallAudio(context) }
 
+    /** 收到问题的回执音：先两声「嗒嗒」，之后每隔一秒一声，直到开始说话。 */
+    private val ticker by lazy { ThinkingTicker(context) }
+
     fun start() {
         // 上一次会话可能留下静音状态和半开的播报窗口，进来先清掉
         ListenBus.setMuted(false)
@@ -71,6 +74,7 @@ class CallModeController(
                 // 回声已经由上面的时间窗解决，文本比对只在打断判断里保留。
                 else -> {
                     transcript(text, "acted")
+                    runCatching { ticker.acknowledge() }
                     onUtterance(text)
                 }
             }
@@ -94,6 +98,7 @@ class CallModeController(
     }
 
     fun stop() {
+        runCatching { ticker.release() }
         ListenBus.onSentence = null
         ListenBus.onSpeechStart = null
         callAudio.exit()
@@ -135,6 +140,7 @@ class CallModeController(
     fun micOff() {
         // 不再静音：只记下窗口起点。判断依据是「现在这一刻」的输出状态，
         // 而不是「有没有配对过耳机」—— 蓝牙连着但声音从扬声器出来也算外放。
+        runCatching { ticker.stop() }
         playStartAt = System.currentTimeMillis()
         playEndAt = 0L
         ListenBus.setMuted(false)
