@@ -64,16 +64,33 @@ class SkillApi internal constructor(
             for (skillId in assetEntries) {
                 val targetDir = File(skillsTargetDir, skillId)
                 val assetDir = "$DEFAULT_SKILLS_ASSET_PATH/$skillId"
-                val files = try {
-                    context.assets.list(assetDir)?.toList().orEmpty()
-                } catch (_: IOException) {
-                    emptyList()
-                }
+                // assets.list 只列一层，scripts/ 这种子目录会被漏掉 —— 递归收集相对路径。
+                val files = mutableListOf<String>()
+                collectAssetFiles(context, assetDir, "", files)
                 val openAsset: (String) -> InputStream? = { name ->
                     runCatching { context.assets.open("$assetDir/$name") }.getOrNull()
                 }
                 reseedSkill(targetDir, files, openAsset)
             }
+        }
+    }
+
+
+    /** 递归列出 skill 目录下的所有文件（相对 skill 根的路径）。 */
+    private fun collectAssetFiles(
+        context: android.content.Context,
+        assetDir: String,
+        prefix: String,
+        out: MutableList<String>,
+    ) {
+        val dir = if (prefix.isEmpty()) assetDir else "$assetDir/$prefix"
+        val children = runCatching { context.assets.list(dir)?.toList().orEmpty() }.getOrDefault(emptyList())
+        for (child in children) {
+            val rel = if (prefix.isEmpty()) child else "$prefix/$child"
+            val nested = runCatching {
+                context.assets.list("$assetDir/$rel")?.toList().orEmpty()
+            }.getOrDefault(emptyList())
+            if (nested.isEmpty()) out.add(rel) else collectAssetFiles(context, assetDir, rel, out)
         }
     }
 
@@ -119,8 +136,10 @@ class SkillApi internal constructor(
             try {
                 for (fileName in assetFiles) {
                     val input = openAsset(fileName) ?: continue
+                    val target = File(targetDir, fileName)
+                    target.parentFile?.mkdirs()
                     input.use {
-                        File(targetDir, fileName).outputStream().use { output ->
+                        target.outputStream().use { output ->
                             it.copyTo(output)
                         }
                     }
