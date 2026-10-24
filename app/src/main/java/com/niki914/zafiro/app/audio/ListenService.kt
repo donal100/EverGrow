@@ -31,10 +31,17 @@ class ListenService : Service() {
             return START_NOT_STICKY
         }
         runCatching { startForeground(NOTIFICATION_ID, buildNotification()) }
-        if (engine == null) {
-            engine = ListenEngine(this) { text -> ListenBus.onSentence?.invoke(text) }.also {
-                it.onSpeechStart = { text -> ListenBus.onSpeechStart?.invoke(text) }
-                it.start()
+        // 两套耳朵：默认 Qwen（本地 VAD 切句 + 云端识别，没有会静默死掉的会话），
+        // 系统识别器保留为回退 —— voice_tuning.txt 里 asr_engine=google 就切回去。
+        if (engine == null && qwenEngine == null) {
+            if (useQwen()) {
+                qwenEngine = QwenListenEngine(this) { text -> ListenBus.onSentence?.invoke(text) }
+                    .also { it.start() }
+            } else {
+                engine = ListenEngine(this) { text -> ListenBus.onSentence?.invoke(text) }.also {
+                    it.onSpeechStart = { text -> ListenBus.onSpeechStart?.invoke(text) }
+                    it.start()
+                }
             }
         }
         return START_STICKY
@@ -43,8 +50,18 @@ class ListenService : Service() {
     override fun onDestroy() {
         engine?.stop()
         engine = null
+        qwenEngine?.stop()
+        qwenEngine = null
         super.onDestroy()
     }
+
+    private fun useQwen(): Boolean = runCatching {
+        val f = java.io.File(filesDir, "voice_tuning.txt")
+        if (!f.isFile) return@runCatching true
+        val v = f.readLines().firstOrNull { it.trim().startsWith("asr_engine=") }
+            ?.substringAfter("=")?.trim()
+        v != "google"
+    }.getOrDefault(true)
 
     private fun ensureChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -69,6 +86,7 @@ class ListenService : Service() {
         private const val CHANNEL_ID = "listen_mode"
         private const val NOTIFICATION_ID = 4712
         @Volatile internal var engine: ListenEngine? = null
+        @Volatile internal var qwenEngine: QwenListenEngine? = null
     }
 }
 
