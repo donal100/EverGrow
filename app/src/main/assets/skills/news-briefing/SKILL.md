@@ -15,6 +15,25 @@ language of the question. Google through SerpApi returns Google's own ranking, t
 an AI overview, and it is not region-blocked here — it replaced Google News (SerpApi), which took 13–25 s per
 query against 0.9–1.4 s for SerpApi.
 
+
+## Search order (user's standing preference)
+
+Try **DeepSeek search first**, especially for anything China- or Hong Kong-related:
+
+```python
+POST https://api.deepseek.com/v1/tools/search
+{"query": "...", "count": 6, "need_content": False}
+```
+Key: `api_key` of the active config in `settings/llm/saved_configs.json`.
+
+Measured: on "Kimi K3.1 Pro pricing" DeepSeek returned Moonshot's **official** pricing page as
+the first hit, where Google search gave four secondary blogs. It is also the right index for
+mainland vendors, Chinese-language coverage and HK local outlets.
+
+Fall back to SerpApi (Google) when the result set lacks dates, drifts into section front pages,
+or the question is Western/English-only — and to Baidu/Sogou/DuckDuckGo via `py_web_search`
+when both fail.
+
 ## Default: two tiers, fast one first
 
 Use the **`py_news` tool** rather than hand-rolling requests — it implements this whole section.
