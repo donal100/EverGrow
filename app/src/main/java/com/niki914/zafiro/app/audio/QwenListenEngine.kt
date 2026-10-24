@@ -77,7 +77,24 @@ class QwenListenEngine(
             file.delete()
             return
         }
+        // 本地检查，音频不出手机：太短、太静、几乎没帧超过阈值的一律不发。
+        // 实测（24 次请求里 5 次是空）：噪声片段 peak≈800 rms 13–69，只有 1/10 帧像语音；
+        // 真人语音 peak>25000 rms 2000+，18/36 帧以上。阈值落在两者中间的空档里。
+        val stats = runCatching { analyse(file) }.getOrNull()
+        if (stats == null) { log("skip: unreadable clip"); file.delete(); return }
+        val (fileMs, rms, speechFrames, totalFrames) = stats
+        if (rms < MIN_RMS) {
+            log("skip: too quiet rms=" + rms + " dur=" + fileMs + "ms")
+            file.delete()
+            return
+        }
+        if (speechFrames < MIN_SPEECH_FRAMES) {
+            log("skip: mostly silence frames=" + speechFrames + "/" + totalFrames)
+            file.delete()
+            return
+        }
         if (!active) { file.delete(); return }
+        log("send: dur=" + fileMs + "ms rms=" + rms + " frames=" + speechFrames + "/" + totalFrames)
         worker.execute { transcribe(file, dur) }
     }
 
@@ -139,6 +156,39 @@ class QwenListenEngine(
         return tail in UNFINISHED_TAIL
     }
 
+    /** 读 16k/16bit 单声道 wav，返回 (时长ms, RMS, 超过阈值的帧数, 总帧数)。帧按 100ms 切。 */
+    private fun analyse(f: File): List<Int> {
+        val bytes = f.readBytes()
+        if (bytes.size <= 44) return listOf(0, 0, 0, 0)
+        val n = (bytes.size - 44) / 2
+        var sumSq = 0.0
+        var speech = 0
+        var frames = 0
+        var i = 44
+        var framePeak = 0
+        var inFrame = 0
+        while (i + 1 < bytes.size) {
+            val lo = bytes[i].toInt() and 0xff
+            val hi = bytes[i + 1].toInt()
+            val v = (hi shl 8) or lo
+            val s = if (v >= 32768) v - 65536 else v
+            sumSq += (s.toDouble() * s)
+            val a = if (s < 0) -s else s
+            if (a > framePeak) framePeak = a
+            inFrame++
+            if (inFrame >= 1600) {
+                frames++
+                if (framePeak > ENERGY_ON) speech++
+                framePeak = 0
+                inFrame = 0
+            }
+            i += 2
+        }
+        val rms = if (n > 0) kotlin.math.sqrt(sumSq / n).toInt() else 0
+        val ms = (n / 16.0).toInt()
+        return listOf(ms, rms, speech, frames)
+    }
+
     private fun tuning(key: String): String? = runCatching {
         val f = File(context.filesDir, "voice_tuning.txt")
         if (!f.isFile) return@runCatching null
@@ -158,8 +208,15 @@ class QwenListenEngine(
         )
         /** 最多再等几轮。3 轮 ≈ 多等 2.7 秒，够说完一句话。 */
         const val MAX_EXTENDS = 3
+        /** 低于这个 RMS 一律不发：噪声实测 13–69，语音 2000+。 */
+        const val MIN_RMS = 300
+        /** 至少这么多帧（每帧 100ms）要超过能量阈值，否则就是纯静音。 */
+        const val MIN_SPEECH_FRAMES = 3
+        /** 与 UtteranceRecorder 的 ENERGY_ON 对齐。 */
+        const val ENERGY_ON = 600
     }
-    private fun minMs(): Long = tuning("gate_min_ms")?.toLongOrNull() ?: 400L
+    /** 最短可发送时长。实测：最短的真人句子 1.1s，噪声碎片 0.6–1.4s，所以落在 900ms。 */
+    private fun minMs(): Long = tuning("gate_min_ms")?.toLongOrNull() ?: 900L
 
     private fun log(msg: String) {
         runCatching {
