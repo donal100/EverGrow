@@ -97,19 +97,46 @@ class QwenListenEngine(
 
     /** 句末停顿延长期：这段时间内又来一句就并成一句（和 ListenEngine 的行为保持一致）。 */
     private fun hold(text: String) {
-        pending.append(if (pending.isEmpty()) text else " " + text)
+        if (text.isNotEmpty()) pending.append(if (pending.isEmpty()) text else " " + text)
+        scheduleRelease(0)
+    }
+
+    private fun scheduleRelease(attempt: Int) {
         val seq = ++holdSeq
         val wait = holdMs()
         log("hold: wait=" + wait + "ms pending=" + pending.length)
         android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
             if (!active || seq != holdSeq) return@postDelayed
             val merged = pending.toString().trim()
+            // 说到一半的句子不要交付：再等一轮，让下半句进来并进去。
+            // 上限 MAX_EXTENDS 次，避免一句「嗯」把整轮对话拖住。
+            if (attempt < MAX_EXTENDS && looksUnfinished(merged)) {
+                log("hold: extend attempt=" + (attempt + 1) + " unfinished=" + merged.take(50))
+                scheduleRelease(attempt + 1)
+                return@postDelayed
+            }
             pending.setLength(0)
             if (merged.isNotEmpty()) {
                 log("hold: release " + merged.take(60))
                 onSentence(merged)
             }
         }, wait)
+    }
+
+    /**
+     * 是不是说到一半。判断只看结尾：连词、冠词、介词、逗号、省略号 —— 这些都是
+     * 「还有下文」的信号。宁可多等一秒，也不要把半句话交给 agent。
+     */
+    private fun looksUnfinished(text: String): Boolean {
+        if (text.isEmpty()) return false
+        val t = text.trim().lowercase()
+        if (t.isEmpty()) return false
+        val last = t.last()
+        if (last == ',' || last == ':' || last == '-' || last == '、' || last == '，' || last == '：') return true
+        if (t.endsWith("...") || t.endsWith("…")) return true
+        val tail = t.trimEnd('.', '!', '?', '。', '！', '？').split(' ', '，', ',', '。').lastOrNull()?.trim().orEmpty()
+        if (tail.isEmpty()) return false
+        return tail in UNFINISHED_TAIL
     }
 
     private fun tuning(key: String): String? = runCatching {
@@ -119,6 +146,19 @@ class QwenListenEngine(
     }.getOrNull()
 
     private fun holdMs(): Long = tuning("endpoint_hold_ms")?.toLongOrNull() ?: 900L
+
+    private companion object {
+        /** 句尾出现这些词，基本可以断定话没说完。 */
+        val UNFINISHED_TAIL = setOf(
+            "and", "but", "or", "so", "because", "if", "when", "which", "that", "than",
+            "the", "a", "an", "of", "to", "with", "for", "from", "in", "on", "at", "by",
+            "is", "are", "was", "were", "will", "would", "can", "could", "should",
+            "my", "your", "our", "their", "his", "her", "its",
+            "um", "uh", "er", "hmm", "like"
+        )
+        /** 最多再等几轮。3 轮 ≈ 多等 2.7 秒，够说完一句话。 */
+        const val MAX_EXTENDS = 3
+    }
     private fun minMs(): Long = tuning("gate_min_ms")?.toLongOrNull() ?: 400L
 
     private fun log(msg: String) {
