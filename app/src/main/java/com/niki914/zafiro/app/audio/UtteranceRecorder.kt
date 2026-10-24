@@ -120,7 +120,7 @@ class UtteranceRecorder(private val filesDir: File) {
                     // 用它存盘会把整句开头切掉（实测丢了 "Okay, now translate"）。
                     vadStart = totalWritten
                     runCatching { onVoiceActivity?.invoke(true) }
-                } else if (speakingDetected && belowCount >= END_FRAMES) {
+                } else if (speakingDetected && belowCount >= endFrames()) {
                     speakingDetected = false
                     runCatching { onVoiceActivity?.invoke(false) }
                 }
@@ -153,6 +153,19 @@ class UtteranceRecorder(private val filesDir: File) {
     /** 相对噪声底的判定阈值：至少 600，且不低于底噪的 2 倍。
      *  之前是 900 / 3 倍，安静房间里开始说话的第一个字常常达不到，被整段跳过。 */
     private fun dynamicThreshold(): Double = maxOf(ENERGY_ON.toDouble(), noiseFloor * FLOOR_MULT)
+
+    /** 静音多久才算「说完了」。默认 1000ms（以前写死 6 帧 = 600ms）：
+     *  实测 600ms 会在句中换气的地方就把句子切断，后半句变成一段没有文字的碎片。
+     *  voice_tuning.txt 里 vad_end_ms=N 可以调，1 帧约 100ms。 */
+    private fun endFrames(): Int {
+        val ms = runCatching {
+            val f = File(filesDir, "voice_tuning.txt")
+            if (!f.isFile) return@runCatching 1000
+            f.readLines().firstOrNull { it.trim().startsWith("vad_end_ms=") }
+                ?.substringAfter("=")?.trim()?.toIntOrNull() ?: 1000
+        }.getOrDefault(1000)
+        return (ms / 100).coerceIn(1, 60)
+    }
 
     /** 现在是否有人声（电平触发用）。 */
     fun isLoud(): Boolean = running && currentLevel > dynamicThreshold()
