@@ -113,7 +113,7 @@ class VoiceCallAudio(private val context: Context) {
     }.getOrNull()
 
     private fun firstInputName(): String = runCatching {
-        am.getDevices(AudioManager.GET_DEVICES_INPUTS).firstOrNull()?.productName ?: "none"
+        am.getDevices(AudioManager.GET_DEVICES_INPUTS).firstOrNull()?.productName?.toString() ?: "none"
     }.getOrDefault("?")
 
     /**
