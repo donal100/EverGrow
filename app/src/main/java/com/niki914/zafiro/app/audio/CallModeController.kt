@@ -130,6 +130,8 @@ class CallModeController(
         // 窗口就永远是「开着」的 —— 实测这就是 21:19 那三条被丢掉的真正原因。
         // 所以：没写结束时间的窗口只认 20 秒，而且整体超过 2 分钟的记录一律作废。
         if (now - start > 120_000L) return@runCatching false
+        // 终点也要有上限：实测写进 +12 小时的终点后，每句转写都被当成回声丢掉。
+        if (end > start + 120_000L) return@runCatching false
         if (end == 0L) return@runCatching (now - start) < 20_000L
         return@runCatching now <= end + TAIL_PAD_MS
     }.getOrDefault(false)
