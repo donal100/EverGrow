@@ -53,17 +53,26 @@ class CallModeController(
                 !audioOnHeadset() && (
                     insidePlaybackWindow(System.currentTimeMillis()) ||
                         insideToolWindow(System.currentTimeMillis())
-                    ) -> log(
-                        "dropped by time window: app=" + (if (insidePlaybackWindow(System.currentTimeMillis())) "open" else "closed") +
-                            " tool=" + (if (insideToolWindow(System.currentTimeMillis())) "open" else "closed") +
-                            " text=" + text.take(30)
-                    )
+                    ) -> {
+                        log(
+                            "dropped by time window: app=" + (if (insidePlaybackWindow(System.currentTimeMillis())) "open" else "closed") +
+                                " tool=" + (if (insideToolWindow(System.currentTimeMillis())) "open" else "closed") +
+                                " text=" + text.take(30)
+                        )
+                        transcript(text, "dropped:echo")
+                    }
                 // 正在播报时，麦克风听到的多半是我自己；外放没有打断功能，直接丢弃
-                VoiceOutbox.isBusy() -> log("dropped while speaking: " + text.take(40))
+                VoiceOutbox.isBusy() -> {
+                    log("dropped while speaking: " + text.take(40))
+                    transcript(text, "dropped:speaking")
+                }
                 // 不再用「文本像不像我说过的话」来判回声：用户复述、引用、讨论我刚才
                 // 说的内容都会命中，实测 21:29 连着两条正常发言被当成 echo 丢掉。
                 // 回声已经由上面的时间窗解决，文本比对只在打断判断里保留。
-                else -> onUtterance(text)
+                else -> {
+                    transcript(text, "acted")
+                    onUtterance(text)
+                }
             }
         }
         // 打断只在戴耳机时启用。
@@ -92,6 +101,35 @@ class CallModeController(
     }
 
     private var headphones = false
+
+    /**
+     * 听写期间的逐句档案：识别出的每一句都留一份，包括被丢掉的，并写清原因。
+     * call_mode.log 到 400KB 会自清，不能当档案；这里按天分文件，只增不改。
+     * 行格式：HH:mm:ss <TAB> acted|dropped:echo|dropped:speaking <TAB> 文本
+     */
+    private fun transcript(text: String, outcome: String) {
+        // 三保险：开关、体积上限、整体 try —— 这一步永远不许影响交付。
+        runCatching {
+            if (tuning("transcript") == "0") return@runCatching
+            val dir = java.io.File(context.filesDir, "transcripts")
+            if (!dir.isDirectory) dir.mkdirs()
+            val now = java.util.Date()
+            val day = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(now)
+            val stamp = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(now)
+            val clean = text.replace('\n', ' ').replace('\t', ' ')
+            val file = java.io.File(dir, day + ".txt")
+            if (file.isFile && file.length() > 4_000_000L) return@runCatching
+            file.appendText(stamp + "\t" + outcome + "\t" + clean + "\n")
+        }
+    }
+
+    /** voice_tuning.txt 里的键值；读不到就是 null。 */
+    private fun tuning(key: String): String? = runCatching {
+        val f = java.io.File(context.filesDir, "voice_tuning.txt")
+        if (!f.isFile) return@runCatching null
+        f.readLines().firstOrNull { it.trim().startsWith("$key=") }?.substringAfter("=")?.trim()
+    }.getOrNull()
+
 
     /** 播报开始：外放时把麦克风静音，耳机时保持收听（用于打断）。 */
     fun micOff() {
