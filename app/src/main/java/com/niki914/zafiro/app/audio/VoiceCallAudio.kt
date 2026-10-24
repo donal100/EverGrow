@@ -72,9 +72,7 @@ class VoiceCallAudio(private val context: Context) {
                 var waited = 0
                 var scoInput: AudioDeviceInfo? = null
                 while (waited < 2000) {
-                    scoInput = am.getDevices(AudioManager.GET_DEVICES_INPUTS).firstOrNull {
-                        it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO || it.type == 26 /* BLE_HEADSET */
-                    }
+                    scoInput = scoInputDevice()
                     if (scoInput != null) break
                     runCatching { Thread.sleep(200) }
                     waited += 200
@@ -108,6 +106,58 @@ class VoiceCallAudio(private val context: Context) {
         }.onFailure { log("exit failed: " + it.message) }
     }
 
+    private fun scoInputDevice(): AudioDeviceInfo? = runCatching {
+        am.getDevices(AudioManager.GET_DEVICES_INPUTS).firstOrNull {
+            it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO || it.type == 26 /* BLE_HEADSET */
+        }
+    }.getOrNull()
+
+    private fun firstInputName(): String = runCatching {
+        am.getDevices(AudioManager.GET_DEVICES_INPUTS).firstOrNull()?.productName ?: "none"
+    }.getOrDefault("?")
+
+    /**
+     * 播报结束后把通话路由拉回来。
+     *
+     * 实测故障：听写进行中我播了一段回复，回复走媒体通道，耳机被交还给 A2DP，
+     * SCO 麦克风链路跟着消失 —— 播完之后没有任何东西把它建回去。之后的每一次
+     * 说话都是 onBeginningOfSpeech / onEndOfSpeech + error=7，一句都识别不出，
+     * 日志里只有 error=7 和 "writer: Stream Closed"，看起来像听写坏了。
+     */
+    fun restoreAfterPlayback(force: Boolean = false) {
+        if (!enabled()) return
+        if (!force && !active) return
+        if (!hasHeadset()) return
+        if (am.mode != AudioManager.MODE_IN_COMMUNICATION) {
+            log("route restore skipped: mode=" + am.mode)
+            return
+        }
+        Thread {
+            val before = firstInputName()
+            runCatching { am.mode = AudioManager.MODE_IN_COMMUNICATION }
+            runCatching { am.stopBluetoothSco() }
+            runCatching { am.startBluetoothSco() }
+            var waited = 0
+            var dev: AudioDeviceInfo? = null
+            while (waited < 2000) {
+                dev = scoInputDevice()
+                if (dev != null) break
+                runCatching { Thread.sleep(100) }
+                waited += 100
+            }
+            if (dev == null) {
+                // 拉不回来就别硬撑通话模式，退回手机麦克风，至少还能听见
+                runCatching { am.stopBluetoothSco() }
+                runCatching { am.mode = AudioManager.MODE_NORMAL }
+            }
+            log(
+                "route restored after playback: before=" + before +
+                    " after=" + (dev?.productName ?: "none") +
+                    " waited=" + waited + "ms mode=" + am.mode
+            )
+        }.apply { isDaemon = true }.start()
+    }
+
     private fun hasHeadset(): Boolean = runCatching {
         am.getDevices(AudioManager.GET_DEVICES_OUTPUTS).any {
             it.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
@@ -126,6 +176,13 @@ class VoiceCallAudio(private val context: Context) {
         runCatching {
             File(context.filesDir, "call_mode.log")
                 .appendText(System.currentTimeMillis().toString() + "  [call] " + msg + "\n")
+        }
+    }
+
+    companion object {
+        /** 给 Python（py_speak_qwen 等）用：播完就调一次，把 SCO 麦克风拉回来。 */
+        fun restoreRoute(context: Context) {
+            runCatching { VoiceCallAudio(context).restoreAfterPlayback(force = true) }
         }
     }
 }

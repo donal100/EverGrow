@@ -112,6 +112,9 @@ class CallModeController(
         playEndAt = System.currentTimeMillis() + TAIL_PAD_MS
         ListenBus.setMuted(false)
         log("playback window closed (+" + TAIL_PAD_MS + "ms tail)")
+        // 播报走媒体通道会把耳机交还给 A2DP，SCO 麦克风链路随之消失；播完必须重建，
+        // 否则接下来的每一句都是 error=7，用户看到的就是「按了听写但没反应」。
+        callAudio.restoreAfterPlayback()
     }
 
 
