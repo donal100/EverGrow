@@ -46,16 +46,50 @@ class QwenListenEngine(
             runCatching { if (speaking) onSpeechStart() else onSpeechEnd() }
         }
         recorder.start()
+        startInputWatcher()
         log("engine=qwen started (hold=" + holdMs() + "ms min=" + minMs() + "ms)")
     }
 
     fun stop() {
         active = false
+        inputWatch = null
         holdSeq++
         recorder.onVoiceActivity = null
         runCatching { recorder.stop() }
         log("engine=qwen stopped")
     }
+
+    /**
+     * 输入设备跟随：有 SCO/蓝牙耳机的输入设备就用它，否则退回手机麦克风。
+     *
+     * 之前这块是空的 —— AudioRecord 一律用系统默认，于是戴着耳机也一直在收手机麦克风，
+     * 录进来的自然是离嘴最远的那个声音。每 2 秒看一次，变了就切换并记一行日志。
+     */
+    private fun startInputWatcher() {
+        if (inputWatch != null) return
+        inputWatch = Thread {
+            var last = "?"
+            while (active) {
+                val name = runCatching {
+                    val am = context.getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
+                    val dev = am.getDevices(android.media.AudioManager.GET_DEVICES_INPUTS).firstOrNull {
+                        it.type == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+                            it.type == 26 /* BLE_HEADSET */
+                    }
+                    recorder.preferredInput = dev
+                    dev?.productName?.toString() ?: "phone mic"
+                }.getOrDefault("?")
+                if (name != last) {
+                    log("input: " + name)
+                    last = name
+                }
+                runCatching { Thread.sleep(2000) }
+            }
+        }.apply { isDaemon = true; name = "qwen-input" }
+        inputWatch?.start()
+    }
+
+    @Volatile private var inputWatch: Thread? = null
 
     private fun onSpeechStart() {
         speechStartedAt = System.currentTimeMillis()
