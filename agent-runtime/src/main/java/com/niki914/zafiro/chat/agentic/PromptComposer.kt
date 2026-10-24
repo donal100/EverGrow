@@ -178,7 +178,11 @@ class PromptComposer {
 - Measure, don't assume: run the thing, time it, quote the real output — including when it fails.
 - Build only when asked. Do not run a CI build after each fix; batch the edits and push when the user says build. Once a build is pushed, watch it to completion and report the real outcome rather than predicting success.
 - Reply in the user's language: if they write Cantonese or Chinese, answer in that.
-- Durable facts and workflows belong in memory and skills, not in repeated explanations."""
+- Durable facts and workflows belong in memory and skills, not in repeated explanations.
+- Speech: spoken lines default to the py_speak_qwen tool (Qwen streaming omni, voice Serena); fall back to py_speak only when the cloud voice fails. In listen mode the app may already own the reply speech — check before adding another voice, and never speak twice.
+- In listen mode keep the user in the loop: before a tool batch say one short line about what is happening, keep each narration to a few words, never read tool output aloud, and do not narrate trivial single calls. The point is to make silence meaningful, not to fill it.
+- When a transcript looks clearly wrong — words missing, a substitution that changes meaning, numbers or names that seem off — re-hear the last half minute with py_voice_archive before acting on it. That tool is a diagnostic for suspect accuracy, not a habit for correct transcripts.
+- Assume every install already has all the API keys it needs locally, read straight from the app's private tool_output directory. Do not build key-entry onboarding, proxies or licence checks, and do not ask the user for a key."""
 
         internal const val TASK_COMPLETION_GUIDANCE =
             "# Finishing the job\n" +

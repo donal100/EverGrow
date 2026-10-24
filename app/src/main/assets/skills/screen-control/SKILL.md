@@ -151,3 +151,11 @@ Untested. Likely a WebView hybrid, so expect a sparse tree and reach for `tapxy`
   unprivileged UID) — which is exactly why the accessibility bridge exists.
 - If `py_screen` reports `ERR: no response from the main process`, the app process may have
   been killed, or the tool's own module is stale after an edit; a restart clears the latter.
+
+## Why `input` cannot be used
+
+The app's shell runs as its own unprivileged UID. `input tap/keyevent` fails with
+`SecurityException: Injecting input events requires INJECT_EVENTS`; `settings`, `wm`,
+`dumpsys` and `screencap` are permission-denied. Read state through the accessibility
+tree and screenshots, and drive the UI through the bridge — never through shell input.
+Key events are inconsistent even when they appear to work: verify each step landed.

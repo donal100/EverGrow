@@ -118,3 +118,39 @@ causes 1 and 2; only running the comparison closes 3, so make it emit its result
 `main` carries the fork work merged from `feat/inject-events-preflight`: label, CI plus committed
 keystore, the `INJECT_EVENTS_MISSING` handling, docs, and locale labels. `feat/*` branches may be
 ahead of `main` — check before assuming what main contains.
+
+## Shipping the APK without breaking it
+
+The rolling release asset is
+`github.com/donal100/EverGrow/releases/download/debug-latest/evergrow-debug.apk`
+(~62 MB). Release-asset downloads **truncate at roughly 10 MB** here — fetch with
+`Range` requests in ~8 MB chunks, then verify `os.path.getsize` against the
+`Content-Range` total and `zipfile.testzip()` before staging. Stage to
+`/storage/emulated/0/Download/evergrow-debug.apk` and trigger a MediaStore scan.
+
+Verify the signer before asking for an install tap: compare
+`getPackageArchiveInfo(apk, GET_SIGNING_CERTIFICATES).signingInfo` against the
+installed package's. Equal → in-place update; different → Android refuses with
+"package conflicts" and the only fix is an uninstall, which destroys the app's data.
+
+## Working on the code from the phone
+
+- The tree at `files/work/donal100-Evergrow-3184eba` is a snapshot of an **old** commit.
+  Pushing a file from it verbatim reverts newer upstream changes. Fetch the current file
+  from the branch HEAD via the Contents API, apply only the delta, then push.
+- Push with the Git Data API: blob → tree (`base_tree`) → commit → `PATCH ref`. One
+  commit per change; CI runs on push to `main`.
+- Chaquopy: an exception raised inside a Python→Java callback propagates to the JVM main
+  thread and kills the app (looks like "Python worker is not connected"). Wrap every
+  callback body in `try/except`.
+- Chaquopy: Java `ArrayList`/`HashSet` are not Python-iterable — `list(javaList)` raises
+  inside a callback. Use `.iterator()`/`hasNext()` or `.toArray()`.
+- Editing a custom Python tool through `py_meta_tools write` does not always take effect
+  immediately: a stale module keeps running until the app process restarts. Re-run and
+  check for new output to confirm the reload. `py_` tools must **print** their result —
+  return values are not surfaced.
+
+## UI constraint worth remembering
+
+The composer's text field gets only the width left after the buttons, so a fourth button
+in the compact row squeezes it to zero. Keep it `attach | text | mic | send`.
