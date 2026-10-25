@@ -329,6 +329,11 @@ class RealtimeTranslator(
         }.getOrNull() ?: return
         runCatching { AudioRouter.earphones(ctx)?.let { t.setPreferredDevice(it) } }
         val played = runCatching { t.play() }.isSuccess
+        // 真的写到哪个设备上：绑错设备（比如没激活的 SCO）就是完全没声音。
+        runCatching {
+            val rd = t.routedDevice
+            Logger.i(LOG_TAG, "audiotrack routed type=" + (rd?.type ?: -1) + " name=" + (rd?.productName ?: "?"))
+        }
         Logger.i(
             LOG_TAG,
             "audiotrack playing=" + played + " panSplit=" + panSplit + " ch=" +

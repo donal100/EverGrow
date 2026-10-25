@@ -28,14 +28,24 @@ object AudioRouter {
             }
         }
         val out = am.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
-        val pick = out.firstOrNull {
-            it.type == AudioDeviceInfo.TYPE_WIRED_HEADPHONES ||
-                it.type == AudioDeviceInfo.TYPE_WIRED_HEADSET ||
-                it.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
-                it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
-                it.type == AudioDeviceInfo.TYPE_USB_HEADSET
-        }
+        val pick = earbudsIn(out)
         return pick?.let { describe(it.type) } ?: "phone speaker (no earphones connected)"
+    }
+
+    /** 同一副耳机有两个输出设备时，优先挑能放立体声的那个（见 earphones 的注释）。 */
+    private fun earbudsIn(out: Array<AudioDeviceInfo>): AudioDeviceInfo? {
+        val order = intArrayOf(
+            AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
+            AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
+            AudioDeviceInfo.TYPE_WIRED_HEADSET,
+            AudioDeviceInfo.TYPE_USB_HEADSET,
+            AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
+        )
+        for (type in order) {
+            val hit = out.firstOrNull { it.type == type }
+            if (hit != null) return hit
+        }
+        return null
     }
 
     fun reset(ctx: Context) {
@@ -46,16 +56,43 @@ object AudioRouter {
         }
     }
 
-    /** 耳机输出设备（给 AudioTrack.setPreferredDevice 用）。 */
+    /**
+     * 耳机输出设备（给 AudioTrack.setPreferredDevice 用）。
+     *
+     * 顺序是重点，不是随手写的：一副蓝牙耳机会同时挂 A2DP 和 SCO 两个输出设备，
+     * 实测 HUAWEI FreeClip 2 的 SCO(id 5055) 排在 A2DP(id 5065) 前面。
+     * 把媒体音轨绑到没有激活的 SCO 上 = 彻底没声音（插着耳机就没声、拔了就有声，
+     * 现象和「分声道坏了」一模一样）。所以先挑 A2DP，SCO 只当兜底。
+     */
     fun earphones(ctx: Context): AudioDeviceInfo? {
         val am = ctx.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return null
-        return am.getDevices(AudioManager.GET_DEVICES_OUTPUTS).firstOrNull {
-            it.type == AudioDeviceInfo.TYPE_WIRED_HEADPHONES ||
-                it.type == AudioDeviceInfo.TYPE_WIRED_HEADSET ||
-                it.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
-                it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
-                it.type == AudioDeviceInfo.TYPE_USB_HEADSET
+        val out = am.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+        val order = intArrayOf(
+            AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
+            AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
+            AudioDeviceInfo.TYPE_WIRED_HEADSET,
+            AudioDeviceInfo.TYPE_USB_HEADSET,
+            AudioDeviceInfo.TYPE_BLE_HEADSET,
+            AudioDeviceInfo.TYPE_BLE_SPEAKER,
+            AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
+        )
+        for (type in order) {
+            val hit = out.firstOrNull { it.type == type }
+            if (hit != null) return hit
         }
+        return null
+    }
+
+    /** 这个设备能不能分左右声道：A2DP / 有线 / USB 都是立体声，SCO 是窄带单声道。 */
+    fun isStereoOut(device: AudioDeviceInfo?): Boolean = when (device?.type) {
+        AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
+        AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
+        AudioDeviceInfo.TYPE_WIRED_HEADSET,
+        AudioDeviceInfo.TYPE_USB_HEADSET,
+        AudioDeviceInfo.TYPE_BLE_HEADSET,
+        AudioDeviceInfo.TYPE_BLE_SPEAKER,
+        -> true
+        else -> false
     }
 
     /** 手机内置麦克风：即使插着耳机也坚持用它。 */

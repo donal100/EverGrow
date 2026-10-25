@@ -144,7 +144,8 @@ object Translator {
                 .firstOrNull { it.startsWith("translate_pan=") }
                 ?.substringAfter("=")?.trim()
         }.getOrNull()
-        val panSplit = panCfg != "off" && twoWay && !cantonese && earphones != null
+        // 只有真正的立体声输出才分声道：SCO 是单声道，分了个寂寞。
+        val panSplit = panCfg != "off" && twoWay && !cantonese && AudioRouter.isStereoOut(earphones)
         val bleed = if (panCfg == "both") 1.0f else 0.12f
         Logger.i(
             LOG_TAG,
