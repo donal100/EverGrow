@@ -311,6 +311,7 @@ class RealtimeTranslator(
         val out = dump ?: return
         val f = dumpFile
         dump = null; dumpFile = null
+        if (f == null) { return }
         runCatching {
             val raf = java.io.RandomAccessFile(f, "rw")
             raf.seek(0)
