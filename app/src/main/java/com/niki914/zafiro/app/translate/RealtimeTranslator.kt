@@ -362,12 +362,18 @@ class RealtimeTranslator(
     /** 播报结束：重新建 SCO 并把耳机麦克风接回来。 */
     private fun restoreCallRoute() {
         Thread {
-            val sco = runCatching { AudioRouter.enterCallAudio(ctx) }.getOrDefault(false)
+            // 每翻译完一句就换一次麦克风：说话的人换了，收音的位置也该跟着换。
+            // 两个人各戴一只耳机时，一人说、翻完、另一人说 —— 轮流对上调。
+            micWantEarbud = !micWantEarbud
             routeSwitchAt = 0L
-            // 播报结束：回到耳机麦克风。SCO 掉过之后老录音器多半已经废了，重建最省事。
-            micWantEarbud = true
+            val sco = if (micWantEarbud) {
+                runCatching { AudioRouter.enterCallAudio(ctx) }.getOrDefault(false)
+            } else {
+                runCatching { AudioRouter.reset(ctx) }
+                false
+            }
             restartMic()
-            Logger.i(LOG_TAG, "route: mic -> earbuds scoOn=" + sco)
+            Logger.i(LOG_TAG, "route: turn end, mic -> " + (if (micWantEarbud) "earbuds" else "phone") + " scoOn=" + sco)
         }.apply { isDaemon = true }.start()
     }
 
