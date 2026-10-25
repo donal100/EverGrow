@@ -362,9 +362,13 @@ class RealtimeTranslator(
     /** 播报结束：重新建 SCO 并把耳机麦克风接回来。 */
     private fun restoreCallRoute() {
         Thread {
-            // 每翻译完一句就换一次麦克风：说话的人换了，收音的位置也该跟着换。
-            // 两个人各戴一只耳机时，一人说、翻完、另一人说 —— 轮流对上调。
-            micWantEarbud = !micWantEarbud
+            // 按语言决定下一个收音的麦克风，而不是死板地轮流：
+            //   这一次出的是英文译文  -> 说明刚才是中文（对面那位）在说，接下来轮到戴耳机的你 -> 耳机麦克风
+            //   这一次出的是中文译文  -> 说明刚才是你在说，接下来轮到对面那位 -> 手机麦克风
+            // 好处：同一个人连说两句也不会错位。
+            val side = if (panSide != 0) panSide else lastPanSide
+            val replyWasEnglish = side != SIDE_RIGHT
+            micWantEarbud = replyWasEnglish
             routeSwitchAt = 0L
             val sco = if (micWantEarbud) {
                 runCatching { AudioRouter.enterCallAudio(ctx) }.getOrDefault(false)
