@@ -317,11 +317,15 @@ class RealtimeTranslator(
             .setSampleRate(24_000)
             .setChannelMask(channels)
             .build()
+        // CONTENT_TYPE_SPEECH 在这台机器上（HyperOS + FreeClip）走的是「话音」那条支路：
+        // 轨道在播、write 全成功、routed 设备就是 A2DP，但耳机里一点声音都没有。
+        // 实测同一段音：SPEECH = 完全没声，MUSIC = 正常。别改回去。
         val attrs = AudioAttributes.Builder()
             .setUsage(AudioAttributes.USAGE_MEDIA)
-            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
             .build()
-        val bufBytes = if (panSplit) 48_000 else 24_000
+        // 缓冲区也别太小：48000 字节（0.5 秒）同样会静音，96000 就正常。
+        val bufBytes = 96_000
         val minBuf = AudioTrack.getMinBufferSize(24_000, channels, AudioFormat.ENCODING_PCM_16BIT)
         val t = runCatching {
             AudioTrack.Builder().setAudioFormat(fmt).setAudioAttributes(attrs)
