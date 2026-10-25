@@ -998,6 +998,7 @@ fun HomePageContent(
         listenMode = listenMode,
         translateMode = translateMode != null,
         translateCaption = translateCaption,
+        transcriptLines = transcriptLines,
         agentSpeaking = agentSpeaking,
         // 药丸就是一个开关：点一下关掉（并立刻静音），再点一下打开。
         // 不做「先停播再关麦」的花样 —— 用户要的是确定的行为。
@@ -1341,6 +1342,8 @@ private fun HomePageContentBody(
     listenMode: Boolean = false,
     translateMode: Boolean = false,
     translateCaption: String = "",
+    /** 实时字幕：翻译器里累积的每一行。 */
+    transcriptLines: List<String> = emptyList(),
     onToggleListenMode: () -> Unit = {},
     agentSpeaking: Boolean = false,
     onPillTap: () -> Unit = {},
