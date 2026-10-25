@@ -198,8 +198,8 @@ class RealtimeTranslator(
     @Volatile private var micStarted = false
     /** 是不是在用耳机麦克风 —— 是的话播放前后要像听写模式那样在 SCO 和 A2DP 之间来回切。 */
     @Volatile private var earbudMicActive = false
-    /** 播报期间麦克风暂停：SCO 已经放下，继续读只会读到空气。 */
-    @Volatile private var micPaused = false
+    /** 当前想用哪个麦克风：true = 耳机，false = 手机（播报窗口里用手机）。 */
+    @Volatile private var micWantEarbud = true
     /** 诊断用：把送上去的麦克风音频原样存一份，事后可以回放/转写。 */
     private var dump: java.io.FileOutputStream? = null
     private var dumpBytes = 0L
@@ -225,16 +225,18 @@ class RealtimeTranslator(
             Logger.w(LOG_TAG, "mic not initialized state=" + rec.state); rec.release(); return
         }
         Logger.i(LOG_TAG, "mic recording source=VOICE_COMMUNICATION")
-        // 用户的要求：插着耳机就用耳机的麦克风，绝不偷偷换回手机的。
-        // 蓝牙耳麦的麦克风只在 SCO 上，所以先把 SCO 点亮；没有耳机麦克风时才退回手机麦克风。
-        val earbudMic = AudioRouter.earbudsMic(ctx)
-        earbudMicActive = earbudMic != null
+        // 两个麦克风分时段用，不能同时用（实测两个 AudioRecord 拿到的是同一路音频）：
+        //   听的时候用耳机麦克风（离说话的人最近）；
+        //   播报的时候耳机链路必须放下（否则耳机没声音），这段时间改用手机麦克风，
+        //   这样对面的人在这几秒里说的话也不会丢。
+        val earbudMic = if (micWantEarbud) AudioRouter.earbudsMic(ctx) else null
+        earbudMicActive = AudioRouter.earbudsMic(ctx) != null
         if (earbudMic != null) {
             val sco = AudioRouter.enterCallAudio(ctx)
             Logger.i(LOG_TAG, "mic pref=earbuds type=" + earbudMic.type + " name=" + earbudMic.productName + " scoOn=" + sco)
             runCatching { rec.setPreferredDevice(earbudMic) }
         } else {
-            Logger.i(LOG_TAG, "mic pref=phone (no earbud mic)")
+            Logger.i(LOG_TAG, "mic pref=phone (playback window or no earbud mic)")
             runCatching { AudioRouter.builtInMic(ctx)?.let { rec.setPreferredDevice(it) } }
         }
         record = rec
@@ -249,11 +251,11 @@ class RealtimeTranslator(
             val buf = ShortArray(1600)
             // 只认自己那个录音器：换麦克风时旧线程必须自己退出，否则读已释放的对象。
             while (running && record === rec) {
-                if (micPaused) { runCatching { Thread.sleep(20) }; continue }
                 val n = runCatching { rec.read(buf, 0, buf.size) }.getOrDefault(-1)
                 if (n <= 0) continue
                 if (muted) continue
-                if (halfDuplex && !textOnly && speaking) continue
+                // 有耳机时播报期间也在录（那几秒用的是手机麦克风），所以不再整段跳过。
+                if (halfDuplex && !textOnly && speaking && !earbudMicActive) continue
                 val bytes = ByteArray(n * 2)
                 var p = 0
                 for (i in 0 until n) {
@@ -349,10 +351,12 @@ class RealtimeTranslator(
 
     /** 播报开始：放下通话链路，让媒体通道回到 A2DP。 */
     private fun releaseCallRoute() {
-        micPaused = true
         runCatching { AudioRouter.reset(ctx) }
         routeSwitchAt = System.currentTimeMillis()
-        Logger.i(LOG_TAG, "route: playback start, sco released")
+        // 播报期间的几秒钟改用手机麦克风：它就在两人之间，对面的人说话听得见。
+        micWantEarbud = false
+        restartMic()
+        Logger.i(LOG_TAG, "route: playback start, mic -> phone")
     }
 
     /** 播报结束：重新建 SCO 并把耳机麦克风接回来。 */
@@ -360,10 +364,10 @@ class RealtimeTranslator(
         Thread {
             val sco = runCatching { AudioRouter.enterCallAudio(ctx) }.getOrDefault(false)
             routeSwitchAt = 0L
-            // SCO 掉过之后老录音器可能已经废了，重新建一个最省事。
+            // 播报结束：回到耳机麦克风。SCO 掉过之后老录音器多半已经废了，重建最省事。
+            micWantEarbud = true
             restartMic()
-            micPaused = false
-            Logger.i(LOG_TAG, "route: mic re-armed scoOn=" + sco)
+            Logger.i(LOG_TAG, "route: mic -> earbuds scoOn=" + sco)
         }.apply { isDaemon = true }.start()
     }
 
