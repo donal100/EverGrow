@@ -175,6 +175,7 @@ class RealtimeTranslator(
                 // 立刻开麦就会把自己的译文再听一遍（实测同一句话被译了三遍）。
                 responseDone = true
                 Logger.i(LOG_TAG, "resp done audioDeltas=" + respDeltas + " bytes=" + audioBytes)
+                flushSentence()
                 // 文字一直没到（纯音频回复）也要定边，否则这一句会永远攒在 pending 里。
                 if (panSplit && panSide == 0) decide(lastPanSide)
                 if (transcript.isNotEmpty()) {
@@ -392,6 +393,9 @@ class RealtimeTranslator(
         startMic()
     }
 
+    /** 一整句的音频先攒起来：MediaPlayer 需要完整文件，不像 AudioTrack 能流式写。 */
+    private val sentence = java.io.ByteArrayOutputStream()
+
     /** 收到一片译文音频：知道走哪边就直接排队，不知道就先攒着。 */
     private fun routeAudio(pcm: ByteArray) {
         audioBytes += pcm.size
@@ -404,10 +408,10 @@ class RealtimeTranslator(
             if (pending.size >= 8) decide(lastPanSide)
             return
         }
-        playback.put(Chunk(pcm, side))
+        synchronized(sentence) { sentence.write(pcm) }
     }
 
-    /** 定边，并把攒下的音频一口气放出去。 */
+    /** 定边，并把攒下的音频并进这一句。 */
     private fun decide(side: Int) {
         panSide = side
         lastPanSide = side
@@ -417,7 +421,15 @@ class RealtimeTranslator(
             LOG_TAG,
             "pan side=" + sideName(side) + " buffered=" + buffered.size + " text=" + transcript.toString().take(24),
         )
-        for (p in buffered) playback.put(Chunk(p, side))
+        synchronized(sentence) { for (p in buffered) sentence.write(p) }
+    }
+
+    /** 这一句说完了：整段交给播放线程。 */
+    private fun flushSentence() {
+        val data = synchronized(sentence) { sentence.toByteArray().also { sentence.reset() } }
+        if (data.isEmpty()) return
+        val side = if (panSide != 0) panSide else lastPanSide
+        playback.put(Chunk(data, side))
     }
 
     /**
@@ -459,73 +471,94 @@ class RealtimeTranslator(
         return out
     }
 
-    /** 播放：24kHz PCM 流式写进 AudioTrack，优先走耳机。 */
+    /**
+     * 播放：每一句写成 wav，交给 MediaPlayer 放。
+     *
+     * 为什么不用 AudioTrack：这台机器上（HyperOS + FreeClip）AudioTrack 明明 state=3、
+     * 一路 write 成功、routed 设备也对，耳机里就是一点声音都没有；同一时刻用 MediaPlayer
+     * 放同一个 wav 就正常（qwen 念稿子一直走 MediaPlayer，所以一直是好的）。
+     * 代价是不能边收边放，要等这一句收完 —— 换来的是一定有声音。
+     */
     private fun startPlayback() {
-        val channels = if (panSplit) AudioFormat.CHANNEL_OUT_STEREO else AudioFormat.CHANNEL_OUT_MONO
-        val fmt = AudioFormat.Builder()
-            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-            .setSampleRate(24_000)
-            .setChannelMask(channels)
-            .build()
-        // CONTENT_TYPE_SPEECH 在这台机器上（HyperOS + FreeClip）走的是「话音」那条支路：
-        // 轨道在播、write 全成功、routed 设备就是 A2DP，但耳机里一点声音都没有。
-        // 实测同一段音：SPEECH = 完全没声，MUSIC = 正常。别改回去。
-        val attrs = AudioAttributes.Builder()
-            .setUsage(AudioAttributes.USAGE_MEDIA)
-            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-            .build()
-        // 缓冲区也别太小：48000 字节（0.5 秒）同样会静音，96000 就正常。
-        val bufBytes = 96_000
-        val minBuf = AudioTrack.getMinBufferSize(24_000, channels, AudioFormat.ENCODING_PCM_16BIT)
-        val t = runCatching {
-            AudioTrack.Builder().setAudioFormat(fmt).setAudioAttributes(attrs)
-                .setBufferSizeInBytes(maxOf(minBuf, bufBytes)).setTransferMode(AudioTrack.MODE_STREAM).build()
-        }.getOrNull() ?: return
-        runCatching { AudioRouter.earphones(ctx)?.let { t.setPreferredDevice(it) } }
-        val played = runCatching { t.play() }.isSuccess
-        // 真的写到哪个设备上：绑错设备（比如没激活的 SCO）就是完全没声音。
-        runCatching {
-            val rd = t.routedDevice
-            Logger.i(LOG_TAG, "audiotrack routed type=" + (rd?.type ?: -1) + " name=" + (rd?.productName ?: "?"))
-        }
-        Logger.i(
-            LOG_TAG,
-            "audiotrack playing=" + played + " panSplit=" + panSplit + " ch=" +
-                (if (panSplit) "stereo" else "mono") + " state=" + t.playState +
-                " buf=" + maxOf(minBuf, bufBytes),
-        )
-        track = t
+        if (playThread != null) return
         playThread = Thread {
-            // 已经写进轨道多少帧：队列空 != 放完，轨道里还压着最多一秒的音频。
-            var writtenFrames = 0L
             while (running) {
                 val chunk = playback.poll(200, TimeUnit.MILLISECONDS)
                 if (chunk == null) {
-                    // 队列空了：如果这一句已经说完，才把麦克风放回来。
                     if (responseDone) {
-                        // 等轨道真的放到尾巴（留 100ms 余量）再换路由，否则最后半句被切掉。
-                        val until = System.currentTimeMillis() + 3000
-                        while (running && System.currentTimeMillis() < until) {
-                            val left = writtenFrames - runCatching { t.playbackHeadPosition.toLong() }.getOrDefault(writtenFrames)
-                            if (left <= 2400) break
-                            runCatching { Thread.sleep(20) }
-                        }
-                        responseDone = false; speaking = false
+                        responseDone = false
+                        speaking = false
                         if (earbudMicActive) restoreCallRoute()
                     }
                     continue
                 }
-                // 刚切过路由的话，等 A2DP 醒过来再写，否则开头半秒会被吞掉。
-                val since = System.currentTimeMillis() - routeSwitchAt
-                if (since in 1..300) runCatching { Thread.sleep(300 - since) }
-                val data = if (panSplit) toStereo(chunk.data, chunk.side) else chunk.data
-                writtenFrames += data.size / (if (panSplit) 4 else 2)
-                val wrote = runCatching { t.write(data, 0, data.size) }.getOrDefault(-1)
-                if (wrote < 0 && audioWarned.compareAndSet(false, true)) {
-                    Logger.w(LOG_TAG, "audiotrack write failed code=" + wrote)
+                playSentence(chunk)
+                if (!running) break
+                if (responseDone) {
+                    responseDone = false
+                    speaking = false
+                    if (earbudMicActive) restoreCallRoute()
                 }
             }
         }.also { it.isDaemon = true; it.start() }
+        Logger.i(LOG_TAG, "playback: MediaPlayer per sentence, panSplit=" + panSplit)
+    }
+
+    /** 一句 wav，按方向调左右音量后播放，播完才返回。 */
+    private fun playSentence(chunk: Chunk) {
+        val file = File(ctx.cacheDir, "tr_play_" + System.currentTimeMillis() + ".wav")
+        runCatching {
+            writeWav(file, chunk.data)
+            val mp = android.media.MediaPlayer()
+            mp.setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                    .build(),
+            )
+            AudioRouter.earphones(ctx)?.let { dev -> runCatching { mp.setPreferredDevice(dev) } }
+            mp.setDataSource(file.absolutePath)
+            mp.prepare()
+            val left = if (panSplit && chunk.side == SIDE_RIGHT) bleed else 1f
+            val right = if (panSplit && chunk.side == SIDE_LEFT) bleed else 1f
+            runCatching { mp.setVolume(left, right) }
+            Logger.i(
+                LOG_TAG,
+                "play sentence bytes=" + chunk.data.size + " side=" + sideName(chunk.side) +
+                    " vol=" + left + "/" + right,
+            )
+            val started = System.currentTimeMillis()
+            mp.start()
+            while (mp.isPlaying && running && System.currentTimeMillis() - started < 30_000) {
+                Thread.sleep(50)
+            }
+            runCatching { mp.release() }
+        }
+        runCatching { file.delete() }
+    }
+
+    /** 24kHz 单声道 16bit PCM 包成 wav。 */
+    private fun writeWav(f: File, pcm: ByteArray) {
+        val out = java.io.FileOutputStream(f)
+        val h = ByteArray(44)
+        fun put32(off: Int, v: Int) {
+            h[off] = (v and 0xFF).toByte()
+            h[off + 1] = ((v shr 8) and 0xFF).toByte()
+            h[off + 2] = ((v shr 16) and 0xFF).toByte()
+            h[off + 3] = ((v shr 24) and 0xFF).toByte()
+        }
+        "RIFF".toByteArray().copyInto(h, 0)
+        put32(4, pcm.size + 36)
+        "WAVE".toByteArray().copyInto(h, 8)
+        "fmt ".toByteArray().copyInto(h, 12)
+        put32(16, 16); h[20] = 1; h[22] = 1
+        put32(24, 24_000); put32(28, 48_000)
+        h[32] = 2; h[34] = 16
+        "data".toByteArray().copyInto(h, 36)
+        put32(40, pcm.size)
+        out.write(h)
+        out.write(pcm)
+        out.close()
     }
 
     fun stop() {
