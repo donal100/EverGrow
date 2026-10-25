@@ -83,10 +83,20 @@ object Translator {
     private fun pushLine(raw: String) {
         val text = raw.trim()
         if (text.isEmpty()) return
+        // 噪声常常被「翻译」成一个字或一个标点。宁可不显示，也不要往屏幕上灌垃圾。
+        if (text.count { it.isLetterOrDigit() } < 2) return
         runCatching {
             lines.add(text)
             while (lines.size > 400) lines.removeAt(0)
             linesVersion++
+        }
+        // 字幕同时落盘：屏幕上出现过什么，事后能和录音逐句对照。
+        runCatching {
+            val app = appCtx ?: return@runCatching
+            val dir = File(app.filesDir, "translate_subs").apply { mkdirs() }
+            val day = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
+            val stamp = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(java.util.Date())
+            File(dir, day + ".txt").appendText(stamp + "\t" + text.replace("\n", " ") + "\n")
         }
     }
 
@@ -137,9 +147,9 @@ object Translator {
                 "You are a Cantonese-to-English interpreter. Whatever you hear, translate it into natural English and output English text only. " +
                 "The speaker may mix in English words or switch languages mid-sentence: still translate the whole utterance into English, keeping names and technical terms as they are."
             "two-way" ->
-                "You are a two-way interpreter between two people, Mandarin and English. If you hear Mandarin, translate it into English. If you hear English, translate it into Simplified Chinese. Say only the translation, briefly and naturally, with no commentary."
+                "You are a two-way interpreter between two people, Mandarin and English. If you hear Mandarin, translate it into English. If you hear English, translate it into Simplified Chinese. Say only the translation, briefly and naturally, with no commentary. If the audio is noise, echo, music or unclear speech, output nothing at all."
             "two-way-yue" ->
-                "You are a two-way interpreter between two people, Cantonese and English. If you hear Cantonese, translate it into natural English. If you hear English, translate it into spoken Cantonese as used in Hong Kong, not Standard Written Chinese. Say only the translation, briefly and naturally, with no commentary."
+                "You are a two-way interpreter between two people, Cantonese and English. If you hear Cantonese, translate it into natural English. If you hear English, translate it into spoken Cantonese as used in Hong Kong, not Standard Written Chinese. Say only the translation, briefly and naturally, with no commentary. If the audio is noise, echo, music or unclear speech, output nothing at all."
             else ->
                 "You are a Mandarin-to-English interpreter. Whatever you hear, translate it into natural English and output English text only. " +
                 "Ignore filler and false starts; keep names and technical terms as they are."

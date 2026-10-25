@@ -203,7 +203,9 @@ class RealtimeTranslator(
     /** 是不是在用耳机麦克风 —— 是的话播放前后要像听写模式那样在 SCO 和 A2DP 之间来回切。 */
     @Volatile private var earbudMicActive = false
     /** 当前想用哪个麦克风：true = 耳机，false = 手机（播报窗口里用手机）。 */
-    @Volatile private var micWantEarbud = true
+    // 只用手机麦克风：耳机麦克风会把耳机里放出来的译文也收进去（开放式耳机漏音），
+    // 模型于是把「自己的声音」再翻译一遍，屏幕上就出现一堆不存在的内容。
+    @Volatile private var micWantEarbud = false
     /** 诊断用：把送上去的麦克风音频原样存一份，事后可以回放/转写。 */
     private var dump: java.io.FileOutputStream? = null
     private var dumpBytes = 0L
@@ -258,8 +260,8 @@ class RealtimeTranslator(
                 val n = runCatching { rec.read(buf, 0, buf.size) }.getOrDefault(-1)
                 if (n <= 0) continue
                 if (muted) continue
-                // 有耳机时播报期间也在录（那几秒用的是手机麦克风），所以不再整段跳过。
-                if (halfDuplex && !textOnly && speaking && !earbudMicActive) continue
+                // 播报期间不送音频：否则模型会听见自己刚说的译文，再「翻译」一遍。
+                if (halfDuplex && !textOnly && speaking) continue
                 val bytes = ByteArray(n * 2)
                 var p = 0
                 for (i in 0 until n) {
@@ -366,13 +368,8 @@ class RealtimeTranslator(
     /** 播报结束：重新建 SCO 并把耳机麦克风接回来。 */
     private fun restoreCallRoute() {
         Thread {
-            // 按语言决定下一个收音的麦克风，而不是死板地轮流：
-            //   这一次出的是英文译文  -> 说明刚才是中文（对面那位）在说，接下来轮到戴耳机的你 -> 耳机麦克风
-            //   这一次出的是中文译文  -> 说明刚才是你在说，接下来轮到对面那位 -> 手机麦克风
-            // 好处：同一个人连说两句也不会错位。
-            val side = if (panSide != 0) panSide else lastPanSide
-            val replyWasEnglish = side != SIDE_RIGHT
-            micWantEarbud = replyWasEnglish
+            // 播报结束就回到手机麦克风（它听得见两个人，也不需要 SCO，不会掐掉耳机的声音）。
+            micWantEarbud = false
             routeSwitchAt = 0L
             val sco = if (micWantEarbud) {
                 runCatching { AudioRouter.enterCallAudio(ctx) }.getOrDefault(false)
