@@ -159,3 +159,51 @@ The app's shell runs as its own unprivileged UID. `input tap/keyevent` fails wit
 `dumpsys` and `screencap` are permission-denied. Read state through the accessibility
 tree and screenshots, and drive the UI through the bridge — never through shell input.
 Key events are inconsistent even when they appear to work: verify each step landed.
+
+## Screenshots are the fallback, and often the primary tool
+
+`read` can come back as **one or two nodes** while the app is plainly on screen. Two
+different causes, same symptom:
+
+- the page is **self-drawn** (Taobao's search page, order tracking, many 活动 pages), or
+- the service reports `ERR: no active window` even though `status` says
+  `foreground=com.taobao.taobao` — the window root is not reachable.
+
+Neither means the bridge is broken. `py_screen(operation="shot")` still works, and you can
+read the page by eye. Take the screenshot, decide coordinates, tap, screenshot again.
+Never claim "the screen cannot be read" without trying `shot` first.
+
+Because a screenshot is a still, do the decision-making yourself: read the Chinese text in
+the image, work out what the page is, then tap.
+
+## You cannot type into a self-drawn field
+
+`type` needs an `EditText` token. On Taobao's search page there is none — the whole page is
+two nodes. So **avoid any flow that needs typing**: reach a product through 足迹 (browsing
+history), 我的订单 → 待发货, or a 店铺 you already opened, and navigate by taps only.
+
+## Every launch resets the app
+
+`getLaunchIntentForPackage` brings Taobao back to its **home** page, not where you left it.
+Since Evergrow tends to reclaim the foreground between tool calls, each Python call must
+re-launch and re-navigate. Put the whole sequence — launch, sleeps, taps, `shot` — inside
+**one** call, and use generous sleeps (5–8 s after launch).
+
+Verified Taobao path (1200×2670 display):
+
+```
+我的淘宝 tab      (1090, 2420)
+待发货            ( 405,  888)
+评价 tab          ( 440,  317)
+查看全部          (1053,  442)
+```
+
+Order-list layouts shift between Taobao builds, so screenshot after each new page rather
+than trusting a coordinate twice.
+
+## What a Taobao product page actually tells you
+
+- The 评价 tab shows 好评/中差评 counts and the shop's 宝贝质量 / 物流速度 / 服务保障 scores.
+- Beware **默认好评**: often nearly all "good" reviews are blank defaults. `50 好评` with
+  one written review means one usable opinion, not fifty.
+- 物流速度 is frequently the only low score; that's a delivery complaint, not a product one.
