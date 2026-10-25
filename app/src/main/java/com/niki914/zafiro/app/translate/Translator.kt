@@ -83,8 +83,7 @@ object Translator {
     private fun pushLine(raw: String) {
         val text = raw.trim()
         if (text.isEmpty()) return
-        // 噪声常常被「翻译」成一个字或一个标点。宁可不显示，也不要往屏幕上灌垃圾。
-        if (text.count { it.isLetterOrDigit() } < 2) return
+        // 不再按长度过滤：字幕要和耳机里听到的一字不差，哪怕它只说了一个字。
         runCatching {
             lines.add(text)
             while (lines.size > 400) lines.removeAt(0)
@@ -201,8 +200,9 @@ object Translator {
             bleed = bleed,
             halfDuplex = twoWay,
             onHeard = { heard ->
+                // 只记录下来（日志），不放进字幕：字幕必须是「模型正在说的话」，
+                // 掺进「它听到的原话」会让屏幕和声音对不上。
                 lastHeard = heard
-                pushLine(heard)
             },
             onTranscript = { text ->
                 lastTranslated = text
