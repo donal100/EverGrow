@@ -410,11 +410,20 @@ class RealtimeTranslator(
         )
         track = t
         playThread = Thread {
+            // 已经写进轨道多少帧：队列空 != 放完，轨道里还压着最多一秒的音频。
+            var writtenFrames = 0L
             while (running) {
                 val chunk = playback.poll(200, TimeUnit.MILLISECONDS)
                 if (chunk == null) {
                     // 队列空了：如果这一句已经说完，才把麦克风放回来。
                     if (responseDone) {
+                        // 等轨道真的放到尾巴（留 100ms 余量）再换路由，否则最后半句被切掉。
+                        val until = System.currentTimeMillis() + 3000
+                        while (running && System.currentTimeMillis() < until) {
+                            val left = writtenFrames - runCatching { t.playbackHeadPosition.toLong() }.getOrDefault(writtenFrames)
+                            if (left <= 2400) break
+                            runCatching { Thread.sleep(20) }
+                        }
                         responseDone = false; speaking = false
                         if (earbudMicActive) restoreCallRoute()
                     }
@@ -424,6 +433,7 @@ class RealtimeTranslator(
                 val since = System.currentTimeMillis() - routeSwitchAt
                 if (since in 1..300) runCatching { Thread.sleep(300 - since) }
                 val data = if (panSplit) toStereo(chunk.data, chunk.side) else chunk.data
+                writtenFrames += data.size / (if (panSplit) 4 else 2)
                 val wrote = runCatching { t.write(data, 0, data.size) }.getOrDefault(-1)
                 if (wrote < 0 && audioWarned.compareAndSet(false, true)) {
                     Logger.w(LOG_TAG, "audiotrack write failed code=" + wrote)
