@@ -47,6 +47,8 @@ class RealtimeTranslator(
      * 关掉就是原来的单声道，两个耳朵一样响。
      */
     private val panSplit: Boolean = false,
+    /** 另一侧的音量。1.0 = 两边一样响（分声道等于没分），0.12 = 只留一点底噪。 */
+    private val bleed: Float = 0.12f,
     /** 外放时为 true：模型说话期间不再上传麦克风，否则它会听见自己并自问自答。 */
     private val halfDuplex: Boolean,
     private val onTranscript: (String) -> Unit,
@@ -80,6 +82,9 @@ class RealtimeTranslator(
 
     /** 一片播放音频 + 它该走哪边（0 = 两边一样，1 = 左，2 = 右）。 */
     private class Chunk(val data: ByteArray, val side: Int)
+
+    /** 这一句收到了几片音频：0 = 模型只给了文字没给声音。 */
+    private var respDeltas = 0
 
     /** 这一句该走哪边：0 = 还没定，1 = 左（英文），2 = 右（中文）。 */
     private var panSide = 0
@@ -147,6 +152,7 @@ class RealtimeTranslator(
                 speaking = true; responseDone = false
                 panSide = 0
                 pending.clear()
+                respDeltas = 0
             }
             "response.audio.delta" -> {
                 val b64 = ev.optString("delta")
@@ -163,12 +169,20 @@ class RealtimeTranslator(
                 // 这里不再直接把 speaking 置回 false：服务端的 done 早于本地播放结束，
                 // 立刻开麦就会把自己的译文再听一遍（实测同一句话被译了三遍）。
                 responseDone = true
+                Logger.i(LOG_TAG, "resp done audioDeltas=" + respDeltas + " bytes=" + audioBytes)
                 // 文字一直没到（纯音频回复）也要定边，否则这一句会永远攒在 pending 里。
                 if (panSplit && panSide == 0) decide(lastPanSide)
                 if (transcript.isNotEmpty()) {
                     onTranscript(transcript.toString())
                     transcript.setLength(0)
                 }
+            }
+            "conversation.item.input_audio_transcription.completed" -> {
+                // 模型到底听见了什么：没有这行，「没反应」只能靠猜是麦克风还是播放。
+                Logger.i(LOG_TAG, "heard: " + ev.optString("transcript").take(80))
+            }
+            "conversation.item.input_audio_transcription.failed" -> {
+                Logger.w(LOG_TAG, "heard: <failed> " + ev.optJSONObject("error")?.optString("message"))
             }
             "error" -> onState("error: " + ev.optJSONObject("error")?.optString("message"))
             // 未知事件一律记一行：协议字段名一旦变了（text 模态的事件名尤其容易变），
@@ -197,6 +211,11 @@ class RealtimeTranslator(
         runCatching { AudioRouter.builtInMic(ctx)?.let { rec.setPreferredDevice(it) } }
         record = rec
         runCatching { rec.startRecording() }
+        // 关键诊断：插着耳机时到底在录哪个设备。录错设备 = 模型什么都没听见。
+        runCatching {
+            val rd = rec.routedDevice
+            Logger.i(LOG_TAG, "mic routed type=" + (rd?.type ?: -1) + " name=" + (rd?.productName ?: "?"))
+        }
         micThread = Thread {
             val buf = ShortArray(1600)
             while (running) {
@@ -226,6 +245,7 @@ class RealtimeTranslator(
     /** 收到一片译文音频：知道走哪边就直接排队，不知道就先攒着。 */
     private fun routeAudio(pcm: ByteArray) {
         audioBytes += pcm.size
+        respDeltas++
         if (!panSplit) { playback.put(Chunk(pcm, 0)); return }
         val side = panSide
         if (side == 0) {
@@ -277,8 +297,8 @@ class RealtimeTranslator(
         var i = 0
         while (i < n) {
             val s = ((pcm[i * 2].toInt() and 0xFF) or (pcm[i * 2 + 1].toInt() shl 8)).toShort().toInt()
-            val l = if (side == SIDE_RIGHT) (s * BLEED).toInt() else s
-            val r = if (side == SIDE_LEFT) (s * BLEED).toInt() else s
+            val l = if (side == SIDE_RIGHT) (s * bleed).toInt() else s
+            val r = if (side == SIDE_LEFT) (s * bleed).toInt() else s
             val o = i * 4
             out[o] = (l and 0xFF).toByte()
             out[o + 1] = ((l shr 8) and 0xFF).toByte()

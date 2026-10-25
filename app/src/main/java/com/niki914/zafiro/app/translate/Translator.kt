@@ -136,11 +136,22 @@ object Translator {
         // 粤语是本地合成播的，走的是另一个播放器；单人模式本来就只出字幕。
         // 没插耳机就不分：外放时左右声道本来也分不开。
         val earphones = AudioRouter.earphones(app)
-        val panSplit = twoWay && !cantonese && earphones != null
+        // 运行时开关（files/voice_tuning.txt）：translate_pan=off 关掉分声道，=both 两侧都满音量。
+        // 没插耳机就不分：外放时左右声道本来也分不开。
+        val panCfg = runCatching {
+            File(ctx.filesDir, "voice_tuning.txt").readLines()
+                .map { it.trim() }
+                .firstOrNull { it.startsWith("translate_pan=") }
+                ?.substringAfter("=")?.trim()
+        }.getOrNull()
+        val panSplit = panCfg != "off" && twoWay && !cantonese && earphones != null
+        val bleed = if (panCfg == "both") 1.0f else 0.12f
         Logger.i(
             LOG_TAG,
             "startRealtime mode=" + mode + " route=" + routing + " textOnly=" + textOnly +
-                " voice=" + voice + " panSplit=" + panSplit,
+                " voice=" + voice + " panSplit=" + panSplit +
+                " earType=" + (earphones?.type ?: -1) + " earName=" + (earphones?.productName ?: "none") +
+                " panCfg=" + panCfg,
         )
         realtime = RealtimeTranslator(
             app,
@@ -148,6 +159,7 @@ object Translator {
             textOnly = textOnly,
             voice = voice,
             panSplit = panSplit,
+            bleed = bleed,
             halfDuplex = twoWay,
             onTranscript = { text ->
                 lastTranslated = text
