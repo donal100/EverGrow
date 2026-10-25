@@ -129,12 +129,22 @@ object Translator {
         val cantonese = mode == "two-way-yue"
         val textOnly = !twoWay || cantonese
         val voice = "Serena"
-        Logger.i(LOG_TAG, "startRealtime mode=" + mode + " route=" + routing + " textOnly=" + textOnly + " voice=" + voice)
+        // 左右分声道：只有「普通话↔英文、双方都出声」这条路才有意义 ——
+        // 粤语是本地合成播的，走的是另一个播放器；单人模式本来就只出字幕。
+        // 没插耳机就不分：外放时左右声道本来也分不开。
+        val earphones = AudioRouter.earphones(app)
+        val panSplit = twoWay && !cantonese && earphones != null
+        Logger.i(
+            LOG_TAG,
+            "startRealtime mode=" + mode + " route=" + routing + " textOnly=" + textOnly +
+                " voice=" + voice + " panSplit=" + panSplit,
+        )
         realtime = RealtimeTranslator(
             app,
             instructions,
             textOnly = textOnly,
             voice = voice,
+            panSplit = panSplit,
             halfDuplex = twoWay,
             onTranscript = { text ->
                 lastTranslated = text

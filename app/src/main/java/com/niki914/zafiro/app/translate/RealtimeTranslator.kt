@@ -41,6 +41,12 @@ class RealtimeTranslator(
     private val textOnly: Boolean = false,
     /** 音色：粤语必须用专门的粤语音色，普通话音色念粤字就是「硬念」。 */
     private val voice: String = "Serena",
+    /**
+     * 立体声分声道：插着耳机时，英文译文只走左耳、中文译文只走右耳，
+     * 另一边留一成二的音量做「伴奏」。两个人各戴一只耳塞就能各听各的语言。
+     * 关掉就是原来的单声道，两个耳朵一样响。
+     */
+    private val panSplit: Boolean = false,
     /** 外放时为 true：模型说话期间不再上传麦克风，否则它会听见自己并自问自答。 */
     private val halfDuplex: Boolean,
     private val onTranscript: (String) -> Unit,
@@ -67,10 +73,19 @@ class RealtimeTranslator(
     private var record: AudioRecord? = null
     private var micThread: Thread? = null
     private var track: AudioTrack? = null
-    private val playback = LinkedBlockingQueue<ByteArray>()
+    private val playback = LinkedBlockingQueue<Chunk>()
     private var playThread: Thread? = null
 
     private val transcript = StringBuilder()
+
+    /** 一片播放音频 + 它该走哪边（0 = 两边一样，1 = 左，2 = 右）。 */
+    private class Chunk(val data: ByteArray, val side: Int)
+
+    /** 这一句该走哪边：0 = 还没定，1 = 左（英文），2 = 右（中文）。 */
+    private var panSide = 0
+    private var lastPanSide = SIDE_LEFT
+    /** 定边之前先攒着：第一片音频往往比第一个文字 delta 到得还早。 */
+    private val pending = ArrayList<ByteArray>()
 
     fun start() {
         if (running) return
@@ -128,22 +143,28 @@ class RealtimeTranslator(
                 onState("ready")
                 startMic()
             }
-            "response.created" -> { speaking = true; responseDone = false }
+            "response.created" -> {
+                speaking = true; responseDone = false
+                panSide = 0
+                pending.clear()
+            }
             "response.audio.delta" -> {
                 val b64 = ev.optString("delta")
-                if (b64.isNotEmpty()) {
-                    val pcm = Base64.decode(b64, Base64.DEFAULT)
-                    audioBytes += pcm.size
-                    playback.put(pcm)
-                }
+                if (b64.isNotEmpty()) routeAudio(Base64.decode(b64, Base64.DEFAULT))
             }
             "response.audio_transcript.delta", "response.text.delta", "response.output_text.delta" -> {
                 transcript.append(ev.optString("delta"))
+                if (panSplit && panSide == 0) {
+                    val guess = guessSide()
+                    if (guess != 0) decide(guess)
+                }
             }
             "response.audio_transcript.done", "response.text.done", "response.done" -> {
                 // 这里不再直接把 speaking 置回 false：服务端的 done 早于本地播放结束，
                 // 立刻开麦就会把自己的译文再听一遍（实测同一句话被译了三遍）。
                 responseDone = true
+                // 文字一直没到（纯音频回复）也要定边，否则这一句会永远攒在 pending 里。
+                if (panSplit && panSide == 0) decide(lastPanSide)
                 if (transcript.isNotEmpty()) {
                     onTranscript(transcript.toString())
                     transcript.setLength(0)
@@ -202,35 +223,108 @@ class RealtimeTranslator(
         }.also { it.isDaemon = true; it.start() }
     }
 
+    /** 收到一片译文音频：知道走哪边就直接排队，不知道就先攒着。 */
+    private fun routeAudio(pcm: ByteArray) {
+        audioBytes += pcm.size
+        if (!panSplit) { playback.put(Chunk(pcm, 0)); return }
+        val side = panSide
+        if (side == 0) {
+            pending.add(pcm)
+            // 文字迟迟不来也不能一直攒：攒到 8 片（约 200ms）就按上一句的边放。
+            if (pending.size >= 8) decide(lastPanSide)
+            return
+        }
+        playback.put(Chunk(pcm, side))
+    }
+
+    /** 定边，并把攒下的音频一口气放出去。 */
+    private fun decide(side: Int) {
+        panSide = side
+        lastPanSide = side
+        val buffered = ArrayList(pending)
+        pending.clear()
+        Logger.i(
+            LOG_TAG,
+            "pan side=" + sideName(side) + " buffered=" + buffered.size + " text=" + transcript.toString().take(24),
+        )
+        for (p in buffered) playback.put(Chunk(p, side))
+    }
+
+    /**
+     * 从译文文字猜语言：出现汉字就是中文译文（右耳），
+     * 纯拉丁字母攒够 6 个就是英文译文（左耳）。不够 6 个先不定边 ——
+     * 「O」这种一个字母的 delta 判不出什么。
+     */
+    private fun guessSide(): Int {
+        var latin = 0
+        for (ch in transcript) {
+            if (ch.code in 0x3400..0x4DBF || ch.code in 0x4E00..0x9FFF) return SIDE_RIGHT
+            if (ch.isLetter()) latin++
+        }
+        return if (latin >= 6) SIDE_LEFT else 0
+    }
+
+    private fun sideName(side: Int) = when (side) {
+        SIDE_LEFT -> "left(en)"
+        SIDE_RIGHT -> "right(zh)"
+        else -> "both"
+    }
+
+    /** 单声道 PCM 摊成双声道：本侧满音量，另一侧留 BLEED，免得听感像断连。 */
+    private fun toStereo(pcm: ByteArray, side: Int): ByteArray {
+        val n = pcm.size / 2
+        val out = ByteArray(n * 4)
+        var i = 0
+        while (i < n) {
+            val s = ((pcm[i * 2].toInt() and 0xFF) or (pcm[i * 2 + 1].toInt() shl 8)).toShort().toInt()
+            val l = if (side == SIDE_RIGHT) (s * BLEED).toInt() else s
+            val r = if (side == SIDE_LEFT) (s * BLEED).toInt() else s
+            val o = i * 4
+            out[o] = (l and 0xFF).toByte()
+            out[o + 1] = ((l shr 8) and 0xFF).toByte()
+            out[o + 2] = (r and 0xFF).toByte()
+            out[o + 3] = ((r shr 8) and 0xFF).toByte()
+            i++
+        }
+        return out
+    }
+
     /** 播放：24kHz PCM 流式写进 AudioTrack，优先走耳机。 */
     private fun startPlayback() {
+        val channels = if (panSplit) AudioFormat.CHANNEL_OUT_STEREO else AudioFormat.CHANNEL_OUT_MONO
         val fmt = AudioFormat.Builder()
             .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
             .setSampleRate(24_000)
-            .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+            .setChannelMask(channels)
             .build()
         val attrs = AudioAttributes.Builder()
             .setUsage(AudioAttributes.USAGE_MEDIA)
             .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
             .build()
-        val minBuf = AudioTrack.getMinBufferSize(
-            24_000, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
+        val bufBytes = if (panSplit) 48_000 else 24_000
+        val minBuf = AudioTrack.getMinBufferSize(24_000, channels, AudioFormat.ENCODING_PCM_16BIT)
         val t = runCatching {
             AudioTrack.Builder().setAudioFormat(fmt).setAudioAttributes(attrs)
-                .setBufferSizeInBytes(maxOf(minBuf, 24_000)).setTransferMode(AudioTrack.MODE_STREAM).build()
+                .setBufferSizeInBytes(maxOf(minBuf, bufBytes)).setTransferMode(AudioTrack.MODE_STREAM).build()
         }.getOrNull() ?: return
         runCatching { AudioRouter.earphones(ctx)?.let { t.setPreferredDevice(it) } }
         val played = runCatching { t.play() }.isSuccess
-        Logger.i(LOG_TAG, "audiotrack playing=$played state=" + t.playState + " buf=" + maxOf(minBuf, 24_000))
+        Logger.i(
+            LOG_TAG,
+            "audiotrack playing=" + played + " panSplit=" + panSplit + " ch=" +
+                (if (panSplit) "stereo" else "mono") + " state=" + t.playState +
+                " buf=" + maxOf(minBuf, bufBytes),
+        )
         track = t
         playThread = Thread {
             while (running) {
-                val data = playback.poll(200, TimeUnit.MILLISECONDS)
-                if (data == null) {
+                val chunk = playback.poll(200, TimeUnit.MILLISECONDS)
+                if (chunk == null) {
                     // 队列空了：如果这一句已经说完，才把麦克风放回来。
                     if (responseDone) { responseDone = false; speaking = false }
                     continue
                 }
+                val data = if (panSplit) toStereo(chunk.data, chunk.side) else chunk.data
                 val wrote = runCatching { t.write(data, 0, data.size) }.getOrDefault(-1)
                 if (wrote < 0 && audioWarned.compareAndSet(false, true)) {
                     Logger.w(LOG_TAG, "audiotrack write failed code=" + wrote)
@@ -258,5 +352,10 @@ class RealtimeTranslator(
     private companion object {
         const val VOICE = "longanqian_v3.1"
         const val LOG_TAG = "niki914_zafiro_RealtimeTranslate"
+        /** 分声道：1 = 左耳（英文），2 = 右耳（中文）。 */
+        const val SIDE_LEFT = 1
+        const val SIDE_RIGHT = 2
+        /** 另一侧的音量：留一点，才不像那只耳朵坏了。 */
+        const val BLEED = 0.12f
     }
 }
