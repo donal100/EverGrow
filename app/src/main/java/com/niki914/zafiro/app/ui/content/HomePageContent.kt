@@ -1515,8 +1515,9 @@ private fun HomePageContentBody(
         // 翻译字幕流：贴在 composer 上方，像片尾字幕一样往上滚，谁说了什么都留在屏幕上。
         if (translateMode != null && transcriptLines.isNotEmpty()) {
             val captionScroll = rememberScrollState()
+            // 最新的一句永远在最上面：视线不需要去找，也不会有「该从下往上读」的别扭。
             LaunchedEffect(transcriptLines.size) {
-                runCatching { captionScroll.animateScrollTo(captionScroll.maxValue) }
+                runCatching { captionScroll.animateScrollTo(0) }
             }
             Column(
                 modifier = Modifier
@@ -1532,7 +1533,7 @@ private fun HomePageContentBody(
                     .padding(horizontal = 14.dp, vertical = 12.dp)
                     .verticalScroll(captionScroll),
             ) {
-                transcriptLines.forEach { line ->
+                transcriptLines.asReversed().forEach { line ->
                     Text(
                         text = line,
                         style = MaterialTheme.typography.bodyLarge,
