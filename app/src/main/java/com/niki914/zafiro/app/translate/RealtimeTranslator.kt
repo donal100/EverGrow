@@ -52,6 +52,8 @@ class RealtimeTranslator(
     /** 外放时为 true：模型说话期间不再上传麦克风，否则它会听见自己并自问自答。 */
     private val halfDuplex: Boolean,
     private val onTranscript: (String) -> Unit,
+    /** 模型听见的原话。字幕流里要有这一行，屏幕才看得出「谁说了什么」。 */
+    private val onHeard: (String) -> Unit = {},
     private val onState: (String) -> Unit,
 ) {
 
@@ -182,7 +184,9 @@ class RealtimeTranslator(
             }
             "conversation.item.input_audio_transcription.completed" -> {
                 // 模型到底听见了什么：没有这行，「没反应」只能靠猜是麦克风还是播放。
-                Logger.i(LOG_TAG, "heard: " + ev.optString("transcript").take(80))
+                val said = ev.optString("transcript").trim()
+                Logger.i(LOG_TAG, "heard: " + said.take(80))
+                if (said.isNotEmpty()) runCatching { onHeard(said) }
             }
             "conversation.item.input_audio_transcription.failed" -> {
                 Logger.w(LOG_TAG, "heard: <failed> " + ev.optJSONObject("error")?.optString("message"))

@@ -63,6 +63,33 @@ object Translator {
     @Volatile var lastHeard: String = ""
     @Volatile var lastTranslated: String = ""
 
+    // ——— 实时字幕（像片尾字幕一样往上滚） ———
+    // 每句一行：先是被听见的原话，然后是译文。UI 只读这个列表，不管翻译怎么实现。
+    private val lines = java.util.concurrent.CopyOnWriteArrayList<String>()
+
+    /** 每次加行都加一，UI 靠它知道要不要重绘。 */
+    @Volatile var linesVersion: Int = 0
+        private set
+
+    fun snapshotLines(): List<String> = runCatching { lines.toList() }.getOrDefault(emptyList())
+
+    fun clearLines() {
+        runCatching {
+            lines.clear()
+            linesVersion++
+        }
+    }
+
+    private fun pushLine(raw: String) {
+        val text = raw.trim()
+        if (text.isEmpty()) return
+        runCatching {
+            lines.add(text)
+            while (lines.size > 400) lines.removeAt(0)
+            linesVersion++
+        }
+    }
+
     val isRunning: Boolean get() = session != null || realtime != null
     val mode: String get() = direction
     val audioRoute: String get() = routing
@@ -118,6 +145,7 @@ object Translator {
                 "Ignore filler and false starts; keep names and technical terms as they are."
         }
         state = "connecting"
+        clearLines()
         val gen = ++generation
         // 两种模式彻底分开：
         //   双人（two-way / two-way-yue）出声 —— 面对面说话时没人愿意盯着屏幕读，
@@ -162,8 +190,13 @@ object Translator {
             panSplit = panSplit,
             bleed = bleed,
             halfDuplex = twoWay,
+            onHeard = { heard ->
+                lastHeard = heard
+                pushLine(heard)
+            },
             onTranscript = { text ->
                 lastTranslated = text
+                pushLine(text)
                 Logger.i(LOG_TAG, "translated: " + text.take(80))
                 if (cantonese) {
                     val g = gen

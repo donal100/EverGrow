@@ -467,6 +467,8 @@ fun HomePageContent(
     var translateMode by rememberSaveable { mutableStateOf<String?>(null) }
     // 单人模式只出文字：这里轮询最近一条译文当字幕，省得为一个字符串再牵一条 Flow。
     var translateCaption by remember { mutableStateOf("") }
+    // 实时字幕：翻译器那边每句一行，这里跟着往下滚。
+    var transcriptLines by remember { mutableStateOf<List<String>>(emptyList()) }
     var pendingUtterance by remember { mutableStateOf<String?>(null) }
     val latestListenMode by rememberUpdatedState(listenMode)
     val callModeController = remember {
@@ -638,6 +640,23 @@ fun HomePageContent(
             val text = com.niki914.zafiro.app.translate.Translator.lastTranslated.trim()
             if (text.isNotEmpty() && text != translateCaption) translateCaption = text
             delay(400)
+        }
+    }
+
+    // 字幕流的轮询：翻译器是普通对象，不是 Compose 状态，所以按版本号取快照。
+    LaunchedEffect(translateMode) {
+        if (translateMode == null) {
+            transcriptLines = emptyList()
+            return@LaunchedEffect
+        }
+        var lastVersion = -1
+        while (true) {
+            val v = com.niki914.zafiro.app.translate.Translator.linesVersion
+            if (v != lastVersion) {
+                lastVersion = v
+                transcriptLines = com.niki914.zafiro.app.translate.Translator.snapshotLines()
+            }
+            delay(250)
         }
     }
 
@@ -1490,25 +1509,34 @@ private fun HomePageContentBody(
             )
         }
 
-        // 单人模式的字幕条：贴在 composer 上方，读讲座/看片时眼睛有的看。
-        if (translateCaption.isNotEmpty()) {
-            Box(
+        // 翻译字幕流：贴在 composer 上方，像片尾字幕一样往上滚，谁说了什么都留在屏幕上。
+        if (translateMode != null && transcriptLines.isNotEmpty()) {
+            val captionScroll = rememberScrollState()
+            LaunchedEffect(transcriptLines.size) {
+                runCatching { captionScroll.animateScrollTo(captionScroll.maxValue) }
+            }
+            Column(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(start = 20.dp, end = 20.dp)
-                    .padding(bottom = composerBottomPadding + composerHeight.value + 12.dp),
+                    .padding(bottom = composerBottomPadding + composerHeight.value + 12.dp)
+                    .fillMaxWidth()
+                    .heightIn(max = 300.dp)
+                    .background(
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.92f),
+                        shape = RoundedCornerShape(18.dp),
+                    )
+                    .padding(horizontal = 14.dp, vertical = 12.dp)
+                    .verticalScroll(captionScroll),
             ) {
-                Text(
-                    text = translateCaption,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier
-                        .background(
-                            color = MaterialTheme.colorScheme.surfaceVariant,
-                            shape = RoundedCornerShape(16.dp),
-                        )
-                        .padding(horizontal = 14.dp, vertical = 10.dp),
-                )
+                transcriptLines.forEach { line ->
+                    Text(
+                        text = line,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.padding(vertical = 3.dp),
+                    )
+                }
             }
         }
 
