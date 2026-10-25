@@ -193,6 +193,9 @@ class RealtimeTranslator(
 
     /** 麦克风：手机自带麦克风，16kHz 单声道，100ms 一片直接推上去。 */
     @Volatile private var micStarted = false
+    private var micChunks = 0
+    private var micSumSq = 0L
+    private var micFrames = 0
 
     private fun startMic() {
         if (micStarted) return
@@ -208,7 +211,17 @@ class RealtimeTranslator(
             Logger.w(LOG_TAG, "mic not initialized state=" + rec.state); rec.release(); return
         }
         Logger.i(LOG_TAG, "mic recording source=VOICE_COMMUNICATION")
-        runCatching { AudioRouter.builtInMic(ctx)?.let { rec.setPreferredDevice(it) } }
+        // 用户的要求：插着耳机就用耳机的麦克风，绝不偷偷换回手机的。
+        // 蓝牙耳麦的麦克风只在 SCO 上，所以先把 SCO 点亮；没有耳机麦克风时才退回手机麦克风。
+        val earbudMic = AudioRouter.earbudsMic(ctx)
+        if (earbudMic != null) {
+            val sco = AudioRouter.enterCallAudio(ctx)
+            Logger.i(LOG_TAG, "mic pref=earbuds type=" + earbudMic.type + " name=" + earbudMic.productName + " scoOn=" + sco)
+            runCatching { rec.setPreferredDevice(earbudMic) }
+        } else {
+            Logger.i(LOG_TAG, "mic pref=phone (no earbud mic)")
+            runCatching { AudioRouter.builtInMic(ctx)?.let { rec.setPreferredDevice(it) } }
+        }
         record = rec
         runCatching { rec.startRecording() }
         // 关键诊断：插着耳机时到底在录哪个设备。录错设备 = 模型什么都没听见。
@@ -229,6 +242,15 @@ class RealtimeTranslator(
                     val v = buf[i].toInt()
                     bytes[p++] = (v and 0xFF).toByte()
                     bytes[p++] = ((v shr 8) and 0xFF).toByte()
+                }
+                // 每 200 片报一次电平：能区分「麦克风没声」和「模型没听见」。
+                var sum = 0L
+                for (i in 0 until n) { val v = buf[i].toInt(); sum += (v * v).toLong() }
+                micSumSq += sum; micFrames += n
+                if (++micChunks >= 200) {
+                    val rms = if (micFrames > 0) Math.sqrt(micSumSq.toDouble() / micFrames).toInt() else 0
+                    Logger.i(LOG_TAG, "mic level rms=" + rms + " frames=" + micFrames)
+                    micChunks = 0; micSumSq = 0L; micFrames = 0
                 }
                 val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
                 val sent = socket?.send(JSONObject().put("type", "input_audio_buffer.append").put("audio", b64).toString()) == true
@@ -364,6 +386,8 @@ class RealtimeTranslator(
 
     fun stop() {
         running = false
+        // 如果为了耳机麦克风把音频切到了通话模式，退出时一定要还回去。
+        runCatching { AudioRouter.reset(ctx) }
         runCatching { socket?.send(JSONObject().put("type", "session.close").toString()) }
         runCatching { socket?.close(1000, "bye") }
         socket = null

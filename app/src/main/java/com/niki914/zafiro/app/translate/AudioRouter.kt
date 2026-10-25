@@ -83,6 +83,44 @@ object AudioRouter {
         return null
     }
 
+    /** 耳机自己的麦克风：蓝牙 SCO / BLE 耳机 / USB / 有线耳麦。没有就返回 null。 */
+    fun earbudsMic(ctx: Context): AudioDeviceInfo? {
+        val am = ctx.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return null
+        val ins = am.getDevices(AudioManager.GET_DEVICES_INPUTS)
+        val order = intArrayOf(
+            AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
+            AudioDeviceInfo.TYPE_BLE_HEADSET,
+            AudioDeviceInfo.TYPE_USB_HEADSET,
+            AudioDeviceInfo.TYPE_WIRED_HEADSET,
+        )
+        for (type in order) {
+            val hit = ins.firstOrNull { it.type == type }
+            if (hit != null) return hit
+        }
+        return null
+    }
+
+    /**
+     * 切到「通话」模式并等 SCO 真的亮起来：蓝牙耳麦的麦克风只在 SCO 上，
+     * 没亮就录不到东西（这里历史上踩过一次，麦克风录到的全是静音）。
+     */
+    fun enterCallAudio(ctx: Context, waitMs: Long = 1500): Boolean {
+        val am = ctx.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return false
+        runCatching {
+            am.mode = AudioManager.MODE_IN_COMMUNICATION
+            @Suppress("DEPRECATION")
+            am.isSpeakerphoneOn = false
+            if (am.isBluetoothScoAvailableOffCall) am.startBluetoothSco()
+        }
+        val until = System.currentTimeMillis() + waitMs
+        while (System.currentTimeMillis() < until) {
+            if (am.isBluetoothScoOn) return true
+            if (!am.isBluetoothScoAvailableOffCall) return false
+            Thread.sleep(100)
+        }
+        return am.isBluetoothScoOn
+    }
+
     /** 这个设备能不能分左右声道：A2DP / 有线 / USB 都是立体声，SCO 是窄带单声道。 */
     fun isStereoOut(device: AudioDeviceInfo?): Boolean = when (device?.type) {
         AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
