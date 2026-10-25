@@ -200,6 +200,11 @@ class RealtimeTranslator(
     @Volatile private var earbudMicActive = false
     /** 播报期间麦克风暂停：SCO 已经放下，继续读只会读到空气。 */
     @Volatile private var micPaused = false
+    /** 诊断用：把送上去的麦克风音频原样存一份，事后可以回放/转写。 */
+    private var dump: java.io.FileOutputStream? = null
+    private var dumpBytes = 0L
+    private var dumpFile: File? = null
+
     /** 上一次切换路由的时刻，用来给 A2DP 留一点醒过来的时间。 */
     @Volatile private var routeSwitchAt = 0L
     private var micChunks = 0
@@ -234,6 +239,7 @@ class RealtimeTranslator(
         }
         record = rec
         runCatching { rec.startRecording() }
+        openDump()
         // 关键诊断：插着耳机时到底在录哪个设备。录错设备 = 模型什么都没听见。
         runCatching {
             val rd = rec.routedDevice
@@ -255,6 +261,7 @@ class RealtimeTranslator(
                     bytes[p++] = (v and 0xFF).toByte()
                     bytes[p++] = ((v shr 8) and 0xFF).toByte()
                 }
+                appendDump(bytes)
                 // 每 200 片报一次电平：能区分「麦克风没声」和「模型没听见」。
                 var sum = 0L
                 for (i in 0 until n) { val v = buf[i].toInt(); sum += (v * v).toLong() }
@@ -275,6 +282,69 @@ class RealtimeTranslator(
             }
         }.also { it.isDaemon = true; it.start() }
     }
+
+    /** 开一个 WAV 把麦克风原音存下来（16k 单声道，和送给模型的完全一致）。 */
+    private fun openDump() {
+        closeDump()
+        if (!dumpEnabled()) return
+        runCatching {
+            val dir = File(ctx.filesDir, "translate_mic").apply { mkdirs() }
+            val f = File(dir, "mic_" + System.currentTimeMillis() + ".wav")
+            val out = java.io.FileOutputStream(f)
+            out.write(ByteArray(44))   // 先占位，收尾时回填长度
+            dump = out; dumpFile = f; dumpBytes = 0L
+            Logger.i(LOG_TAG, "mic dump -> " + f.name)
+        }
+    }
+
+    private fun appendDump(bytes: ByteArray) {
+        val out = dump ?: return
+        runCatching {
+            out.write(bytes)
+            dumpBytes += bytes.size
+            if (dumpBytes > 60L * 1024 * 1024) closeDump()   // 60MB 上限，约 30 分钟
+        }
+    }
+
+    /** 收尾：回填 WAV 头。写坏也不能影响翻译，所以全都包在 runCatching 里。 */
+    private fun closeDump() {
+        val out = dump ?: return
+        val f = dumpFile
+        dump = null; dumpFile = null
+        runCatching {
+            val raf = java.io.RandomAccessFile(f, "rw")
+            raf.seek(0)
+            val dataLen = dumpBytes.toInt()
+            val h = ByteArray(44)
+            fun put32(off: Int, v: Int) {
+                h[off] = (v and 0xFF).toByte()
+                h[off + 1] = ((v shr 8) and 0xFF).toByte()
+                h[off + 2] = ((v shr 16) and 0xFF).toByte()
+                h[off + 3] = ((v shr 24) and 0xFF).toByte()
+            }
+            "RIFF".toByteArray().copyInto(h, 0)
+            put32(4, dataLen + 36)
+            "WAVE".toByteArray().copyInto(h, 8)
+            "fmt ".toByteArray().copyInto(h, 12)
+            put32(16, 16); h[20] = 1; h[22] = 1
+            put32(24, 16000); put32(28, 32000)
+            h[32] = 2; h[34] = 16
+            "data".toByteArray().copyInto(h, 36)
+            put32(40, dataLen)
+            raf.write(h)
+            raf.close()
+            out.close()
+            Logger.i(LOG_TAG, "mic dump closed bytes=" + dataLen + " file=" + f.name)
+        }
+    }
+
+    /** files/voice_tuning.txt: translate_dump=0 关掉录音存档。默认开着，方便诊断。 */
+    private fun dumpEnabled(): Boolean = runCatching {
+        val f = File(ctx.filesDir, "voice_tuning.txt")
+        if (!f.isFile) return@runCatching true
+        f.readLines().firstOrNull { it.trim().startsWith("translate_dump=") }
+            ?.substringAfter("=")?.trim() != "0"
+    }.getOrDefault(true)
 
     /** 播报开始：放下通话链路，让媒体通道回到 A2DP。 */
     private fun releaseCallRoute() {
@@ -444,6 +514,7 @@ class RealtimeTranslator(
 
     fun stop() {
         running = false
+        closeDump()
         // 如果为了耳机麦克风把音频切到了通话模式，退出时一定要还回去。
         runCatching { AudioRouter.reset(ctx) }
         runCatching { socket?.send(JSONObject().put("type", "session.close").toString()) }
