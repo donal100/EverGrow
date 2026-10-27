@@ -233,12 +233,39 @@ repeat(8) { print(hello) }
 ```
 """
 
+/**
+ * Markdown 渲染前把 `$` 转义成 `\$`。
+ *
+ * 聊天链路里成对的 `$` 之间的内容会在渲染时整段消失（价格只剩 "0.50"），
+ * 而 mikepenz 的 Markdown 会把 `\$` 还原成 `$`（EntityConverter 的 escape 白名单含 `$`），
+ * 所以转义既保住显示又不丢字。围栏代码块内保持原样，避免 shell 片段里多出反斜杠。
+ */
+internal fun escapeMarkdownDollars(input: String): String {
+    if ('$' !in input) return input
+    val sb = StringBuilder(input.length + 8)
+    var inFence = false
+    val lines = input.split("\n")
+    lines.forEachIndexed { index, line ->
+        if (index > 0) sb.append('\n')
+        if (line.trimStart().startsWith("```")) {
+            inFence = !inFence
+            sb.append(line)
+        } else if (inFence) {
+            sb.append(line)
+        } else {
+            sb.append(line.replace("$", "\\$"))
+        }
+    }
+    return sb.toString()
+}
+
 @Composable
 fun AssistantOutputText(
     text: String,
     modifier: Modifier = Modifier,
 ) {
-    val markdownState = rememberMarkdownState(content = text, retainState = true)
+    val rendered = remember(text) { escapeMarkdownDollars(text) }
+    val markdownState = rememberMarkdownState(content = rendered, retainState = true)
 
     SelectionContainer(modifier = modifier.fillMaxWidth()) {
         Markdown(
