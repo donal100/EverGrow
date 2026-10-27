@@ -42,6 +42,10 @@ class QwenListenEngine(
             return
         }
         active = true
+        // 上一次会话的录音器可能仍然活着：running=true 时 start() 直接返回，
+        // 新回调就永远装不上 —— 录音照旧写存档，却没人再收到 VAD 事件，
+        // 表现就是「listen 开着、说话没反应、日志里连 asr 都没有」。
+        runCatching { recorder.stop() }
         recorder.onVoiceActivity = { speaking ->
             runCatching { if (speaking) onSpeechStart() else onSpeechEnd() }
         }

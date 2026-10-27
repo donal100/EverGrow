@@ -67,14 +67,29 @@ class UtteranceRecorder(private val filesDir: File) {
 
     private fun dir(): File = File(filesDir, DIR).apply { if (!exists()) mkdirs() }
 
+    /** 录音器自己的日志：静默失败以前完全查不到原因，这里补上。 */
+    private fun log(msg: String) {
+        runCatching {
+            val f = File(filesDir, "call_mode.log")
+            if (f.length() > 400_000) f.writeText("")
+            f.appendText(System.currentTimeMillis().toString() + "  [rec] " + msg + "\n")
+        }
+    }
+
     fun start() {
-        if (running) return
+        if (running) {
+            log("start: ignored, already running")
+            return
+        }
         val minBuf = AudioRecord.getMinBufferSize(
             sampleRate,
             AudioFormat.CHANNEL_IN_MONO,
             AudioFormat.ENCODING_PCM_16BIT,
         )
-        if (minBuf <= 0) return
+        if (minBuf <= 0) {
+            log("start: minBuf=" + minBuf)
+            return
+        }
         val rec = runCatching {
             AudioRecord(
                 MediaRecorder.AudioSource.MIC,
@@ -83,15 +98,20 @@ class UtteranceRecorder(private val filesDir: File) {
                 AudioFormat.ENCODING_PCM_16BIT,
                 maxOf(minBuf, sampleRate * 2),
             )
-        }.getOrNull() ?: return
+        }.getOrNull() ?: run {
+            log("start: AudioRecord create failed")
+            return
+        }
         if (rec.state != AudioRecord.STATE_INITIALIZED) {
             rec.release()
+            log("start: state=" + rec.state)
             return
         }
         record = rec
         runCatching { preferredInput?.let { rec.setPreferredDevice(it) } }
         running = true
         runCatching { rec.startRecording() }
+        log("start ok: state=" + rec.state + " thr=" + dynamicThreshold().toInt())
         thread = Thread {
             val buf = ShortArray(1600)
             while (running) {
@@ -119,9 +139,11 @@ class UtteranceRecorder(private val filesDir: File) {
                     // 记下真正的开口位置。识别器的 onBeginningOfSpeech 通常晚 0.5-1.5 秒，
                     // 用它存盘会把整句开头切掉（实测丢了 "Okay, now translate"）。
                     vadStart = totalWritten
+                    log("vad on peak=" + peak + " thr=" + dynamicThreshold().toInt() + " cb=" + (onVoiceActivity != null))
                     runCatching { onVoiceActivity?.invoke(true) }
                 } else if (speakingDetected && belowCount >= endFrames()) {
                     speakingDetected = false
+                    log("vad off silent=" + belowCount + " frames")
                     runCatching { onVoiceActivity?.invoke(false) }
                 }
                 synchronized(lock) {
@@ -143,6 +165,7 @@ class UtteranceRecorder(private val filesDir: File) {
     }
 
     fun stop() {
+        log("stop: running=" + running)
         running = false
         runCatching { record?.stop() }
         runCatching { record?.release() }
