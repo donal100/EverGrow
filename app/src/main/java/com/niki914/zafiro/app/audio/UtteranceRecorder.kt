@@ -52,7 +52,7 @@ class UtteranceRecorder(private val filesDir: File) {
      * 固定阈值做不到这一点：要么被音乐触发，要么在安静处又听不见。
      */
     @Volatile
-    private var noiseFloor = 300.0
+    private var noiseFloor = 800.0
 
     private var speakingDetected = false
     private var aboveCount = 0
@@ -123,14 +123,21 @@ class UtteranceRecorder(private val filesDir: File) {
                     if (v > peak) peak = v
                 }
                 currentLevel = peak
-                // 只有在「判断为没人说话」时才更新噪声底，避免把人声也学进去
-                if (!speakingDetected) {
-                    noiseFloor = noiseFloor * 0.98 + peak * 0.02
+                // 噪声底：上升快、下降慢。
+                // 之前只在「判定没人说话」时更新，一旦误触发成 speaking 就再也学不到底噪；
+                // 而这台手机静音时的 peak 也有 700–1100，永远掉不到 ENERGY_OFF(450) 以下，
+                // 状态就卡在「还在说话」，一句话都交不出去（20:38 的日志就是这样）。
+                if (!speakingDetected || peak < endThreshold()) {
+                    noiseFloor = if (peak > noiseFloor) {
+                        noiseFloor * 0.7 + peak * 0.3
+                    } else {
+                        noiseFloor * 0.98 + peak * 0.02
+                    }
                 }
                 if (peak > dynamicThreshold()) {
                     aboveCount++
                     belowCount = 0
-                } else if (peak < ENERGY_OFF) {
+                } else if (peak < endThreshold()) {
                     belowCount++
                     aboveCount = 0
                 }
@@ -139,12 +146,22 @@ class UtteranceRecorder(private val filesDir: File) {
                     // 记下真正的开口位置。识别器的 onBeginningOfSpeech 通常晚 0.5-1.5 秒，
                     // 用它存盘会把整句开头切掉（实测丢了 "Okay, now translate"）。
                     vadStart = totalWritten
+                    speakFrames = 0
                     log("vad on peak=" + peak + " thr=" + dynamicThreshold().toInt() + " cb=" + (onVoiceActivity != null))
                     runCatching { onVoiceActivity?.invoke(true) }
-                } else if (speakingDetected && belowCount >= endFrames()) {
-                    speakingDetected = false
-                    log("vad off silent=" + belowCount + " frames")
-                    runCatching { onVoiceActivity?.invoke(false) }
+                } else if (speakingDetected) {
+                    speakFrames++
+                    val silent = belowCount
+                    val forced = speakFrames >= MAX_SPEAK_FRAMES
+                    if (silent >= endFrames() || forced) {
+                        speakingDetected = false
+                        belowCount = 0
+                        log(
+                            if (forced) "vad force end frames=" + speakFrames
+                            else "vad off silent=" + silent + " thr=" + endThreshold().toInt(),
+                        )
+                        runCatching { onVoiceActivity?.invoke(false) }
+                    }
                 }
                 synchronized(lock) {
                     for (i in 0 until n) {
@@ -176,6 +193,9 @@ class UtteranceRecorder(private val filesDir: File) {
     /** 相对噪声底的判定阈值：至少 600，且不低于底噪的 2 倍。
      *  之前是 900 / 3 倍，安静房间里开始说话的第一个字常常达不到，被整段跳过。 */
     private fun dynamicThreshold(): Double = maxOf(ENERGY_ON.toDouble(), noiseFloor * FLOOR_MULT)
+
+    /** 收尾阈值：比抬起阈值低一档，但必须高于实测底噪，否则静音也判成有声。 */
+    private fun endThreshold(): Double = maxOf(ENERGY_OFF.toDouble(), noiseFloor * 1.4)
 
     /** 静音多久才算「说完了」。默认 1000ms（以前写死 6 帧 = 600ms）：
      *  实测 600ms 会在句中换气的地方就把句子切断，后半句变成一段没有文字的碎片。
@@ -247,6 +267,7 @@ class UtteranceRecorder(private val filesDir: File) {
 
     /** VAD 判定的开口位置（帧计数），比识别器早，用于存盘时保住句首。 */
     private var vadStart = -1L
+    private var speakFrames = 0
 
     fun markSpeechStart() {
         speechStart = totalWritten
@@ -360,6 +381,8 @@ class UtteranceRecorder(private val filesDir: File) {
         const val ENERGY_OFF = 450
         /** 每帧约 100ms：1 帧起说话即触发，6 帧（≈600ms）静音算说完。 */
         const val ONSET_FRAMES = 1
+        /** 连续「说话」超过 200 帧（约 20 秒）强制收尾，防状态卡死。 */
+        const val MAX_SPEAK_FRAMES = 200
         const val END_FRAMES = 6
         const val MAX_AGE_MS = 20 * 60 * 1000L
         /** 滚动存档：每段 10 秒，只保留最近 5 分钟（≈10MB） */
