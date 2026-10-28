@@ -134,8 +134,11 @@ class QwenListenEngine(
             file.delete()
             return
         }
-        if (speechFrames < MIN_SPEECH_FRAMES) {
-            log("skip: mostly silence frames=" + speechFrames + "/" + totalFrames)
+        // 短句要能过（"hello" 只有一秒），坏片段靠能量和「像人声的帧占比」挡，
+        // 而不是靠时长 —— 时长门槛会把真话一起切掉。
+        val needFrames = maxOf(MIN_SPEECH_FRAMES, totalFrames / 4)
+        if (speechFrames < needFrames) {
+            log("skip: mostly silence frames=" + speechFrames + "/" + totalFrames + " need=" + needFrames)
             file.delete()
             return
         }
@@ -257,7 +260,7 @@ class QwenListenEngine(
         /** 停止后留给「收尾那句」的交付窗口。 */
         const val DRAIN_MS = 10_000L
         /** 低于这个 RMS 一律不发：噪声实测 13–69，语音 2000+。 */
-        const val MIN_RMS = 300
+        const val MIN_RMS = 1000
         /** 至少这么多帧（每帧 100ms）要超过能量阈值，否则就是纯静音。 */
         const val MIN_SPEECH_FRAMES = 3
         /** 与 UtteranceRecorder 的 ENERGY_ON 对齐。 */
