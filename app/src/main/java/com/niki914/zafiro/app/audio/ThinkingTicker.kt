@@ -3,9 +3,7 @@ package com.niki914.zafiro.app.audio
 import android.content.Context
 import android.media.AudioAttributes
 import android.media.AudioFormat
-import android.media.AudioManager
 import android.media.AudioTrack
-import android.media.MediaPlayer
 import android.os.Handler
 import android.os.Looper
 import java.io.File
@@ -13,140 +11,34 @@ import kotlin.math.PI
 import kotlin.math.sin
 
 /**
- * 听写模式的「收到，正在做」提示音。
+ * 听写模式的回执提示音：**一声**短音，表示「收到了，正在做」。
  *
- * 第一版用 ToneGenerator + STREAM_MUSIC，实测一声都没有 —— 通话模式下 STREAM_MUSIC
- * 被路由到 HFP 的窄带通路，音乐流进去就没了。改成自己合成一段正弦波，用
- * AudioTrack 以 USAGE_VOICE_COMMUNICATION 播放：和我的说话走同一条路，
- * 人耳听得到，也说明「这条路是活的」。
+ * 走到这一版试过三种，都失败了，所以写在这里免得再来一次：
+ * 1. 两声「嗒嗒」—— 听着像出错，不像回执。
+ * 2. 每 1.2 秒循环一声 —— 像卡住，而且一直响。
+ * 3. 念一句「I am working on it」—— 外放时麦克风把它听回去，识别成用户的请求，
+ *    于是又回执、又被听见……自己和自己对话（2026-10-28 09:46 的日志）。
  *
- * 第一声是回执（两声短促的「嗒嗒」），之后每 1.2 秒一声，开口说话就停。
- * voice_tuning.txt: thinking_tick=0 关闭，thinking_tick_ms 调间隔。
+ * 所以：一声，不循环，不出人声。voice_tuning.txt 里 ack_voice=0 可整条关掉。
  */
 class ThinkingTicker(private val context: Context) {
 
     private val main = Handler(Looper.getMainLooper())
-    @Volatile private var running = false
-    @Volatile private var startedAt = 0L
-    private var player: MediaPlayer? = null
+    private val beep: ShortArray by lazy { tone(BEEP_HZ, BEEP_MS) }
 
-    private val beep: ShortArray by lazy { tone(880.0, 60) }
-    private val beepLow: ShortArray by lazy { tone(660.0, 50) }
-
-    private val tick = object : Runnable {
-        override fun run() {
-            if (!running) return
-            // 我一开始说话就停：py 播报走的是另一条路径，不会调用 micOff，
-            // 所以这里自己看 speech_window.txt（py_speak* 播放前会写它）。
-            if (ownVoicePlaying()) { log("tick stop: our voice started"); stop(); return }
-            if (System.currentTimeMillis() - startedAt > MAX_MS) { stop(); return }
-            play(beepLow)
-            main.postDelayed(this, intervalMs())
-        }
-    }
-
-    /** py 播报工具写的「我正在出声」时间窗；窗口内就别再嘀了。 */
-    private fun ownVoicePlaying(): Boolean = runCatching {
-        val f = File(context.filesDir, "speech_window.txt")
-        if (!f.isFile) return@runCatching false
-        val parts = f.readText().trim().split(Regex("\\s+"))
-        if (parts.size < 2) return@runCatching false
-        val start = parts[0].toLongOrNull() ?: return@runCatching false
-        val end = parts[1].toLongOrNull() ?: 0L
-        val now = System.currentTimeMillis()
-        if (now - start > 120_000L) return@runCatching false
-        if (end == 0L) return@runCatching (now - start) < 20_000L
-        now in start..(end + 2_500L)
-    }.getOrDefault(false)
-
-    /**
-     * 收到用户的话了：念一句「I am working on it」，比嘀一声更像人在回应。
-     * 素材在 assets/audio/ack_working.mp3（qwen3-tts-flash / Serena 合成），
-     * 本地播放、不走网络，延迟只有几毫秒。
-     */
+    /** 收到一句用户的话：响一声就走。 */
     fun acknowledge() {
-        if (!ackEnabled()) return
-        if (!playWorkingOnIt()) {
-            // 素材缺失时退回原来的两声提示音
-            startedAt = System.currentTimeMillis()
-            play(beep)
-            main.postDelayed({ play(beep) }, 130L)
-        }
-        if (!running && tickEnabled()) {
-            running = true
-            main.postDelayed(tick, 900L)
-            log("tick start every " + intervalMs() + "ms (vol=" + mediaVolume() + ")")
-        }
+        if (!enabled()) return
+        play(beep)
+        log("ack: beep")
     }
 
-    /** 播放「I am working on it」素材；素材缺失或播放失败返回 false。 */
-    private fun playWorkingOnIt(): Boolean {
-        runCatching { player?.release() }
-        player = null
-        val file = runCatching {
-            val out = File(context.cacheDir, "ack_working.mp3")
-            if (!out.isFile || out.length() == 0L) {
-                context.assets.open(ACK_ASSET).use { input ->
-                    out.outputStream().use { input.copyTo(it) }
-                }
-            }
-            out
-        }.getOrNull()
-        if (file == null || !file.isFile || file.length() == 0L) {
-            log("ack: asset missing (" + ACK_ASSET + ")")
-            return false
-        }
-        val mp = runCatching {
-            MediaPlayer().apply {
-                setAudioAttributes(
-                    AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                        .build(),
-                )
-                setDataSource(file.absolutePath)
-                setOnCompletionListener { p ->
-                    runCatching { p.release() }
-                    if (player === p) player = null
-                }
-                prepare()
-            }
-        }.getOrNull()
-        if (mp == null) {
-            log("ack: prepare failed")
-            return false
-        }
-        player = mp
-        val ok = runCatching { mp.start() }.isSuccess
-        if (ok) markAckWindow(mp.duration.toLong() + 600L)
-        log(if (ok) "ack: working-on-it" else "ack: start failed")
-        return ok
-    }
+    /** 老接口：循环已经没有了，保留空实现以免调用方改动。 */
+    fun stop() = Unit
 
-    /**
-     * 这句回执也是「我的声音」：写进 speech_window.txt，麦克风再听到它时按回声丢掉。
-     * 不写就会出现「它听见自己说 I am working on it，然后把它当成用户的请求」。
-     */
-    private fun markAckWindow(holdMs: Long) {
-        runCatching {
-            val now = System.currentTimeMillis()
-            File(context.filesDir, "speech_window.txt")
-                .writeText(now.toString() + " " + (now + holdMs.coerceAtLeast(400L)))
-        }
-    }
+    fun release() = Unit
 
-    fun stop() {
-        runCatching { player?.release() }
-        player = null
-        if (!running) return
-        running = false
-        main.removeCallbacks(tick)
-        log("tick stop")
-    }
-
-    fun release() = stop()
-
-    /** 直接写一段 PCM 到 AudioTrack：不开线程、不占焦点，几毫秒就播完。 */
+    /** 直接写一段 PCM 到 AudioTrack：不开线程、不占焦点，几十毫秒播完。 */
     private fun play(samples: ShortArray) {
         val attrs = AudioAttributes.Builder()
             .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
@@ -160,22 +52,24 @@ class ThinkingTicker(private val context: Context) {
                         .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
                         .setSampleRate(RATE)
                         .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-                        .build()
+                        .build(),
                 )
                 .setTransferMode(AudioTrack.MODE_STATIC)
                 .setBufferSizeInBytes(samples.size * 2)
                 .build()
         }.getOrNull()
-        if (track == null) { log("play failed: no AudioTrack"); return }
+        if (track == null) {
+            log("play failed: no AudioTrack")
+            return
+        }
         runCatching {
             track.write(samples, 0, samples.size)
             track.play()
-            // STATIC 模式播完会自动停；这里留一点时间再释放，避免被截断
-            main.postDelayed({ runCatching { track.release() } }, 400L)
+            main.postDelayed({ runCatching { track.release() } }, 600L)
         }.onFailure { log("play error: " + it.message) }
     }
 
-    /** 60ms 的正弦，带 8ms 淡入淡出，避免咔哒声。 */
+    /** 70ms 的正弦，带 8ms 淡入淡出，避免咔哒声。 */
     private fun tone(hz: Double, ms: Int): ShortArray {
         val n = (RATE * ms / 1000.0).toInt()
         val out = ShortArray(n)
@@ -192,30 +86,12 @@ class ThinkingTicker(private val context: Context) {
         return out
     }
 
-    private fun mediaVolume(): Int = runCatching {
-        val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-        am.getStreamVolume(AudioManager.STREAM_VOICE_CALL)
-    }.getOrDefault(-1)
-
-    /** 口语回执开关：voice_tuning.txt 的 ack_voice=0 关闭（默认开）。 */
-    private fun ackEnabled(): Boolean = tuningValue("ack_voice", "1") != "0"
-
-    /** 持续的提示音循环：thinking_tick=0 关闭（默认关，口语回执已经够了）。 */
-    private fun tickEnabled(): Boolean = tuningValue("thinking_tick", "0") != "0"
-
-    private fun tuningValue(key: String, def: String): String = runCatching {
+    private fun enabled(): Boolean = runCatching {
         val f = File(context.filesDir, "voice_tuning.txt")
-        if (!f.isFile) return@runCatching def
-        f.readLines().firstOrNull { it.trim().startsWith(key + "=") }
-            ?.substringAfter("=")?.trim() ?: def
-    }.getOrDefault(def)
-
-    private fun intervalMs(): Long = runCatching {
-        val f = File(context.filesDir, "voice_tuning.txt")
-        if (!f.isFile) return@runCatching 1200L
-        f.readLines().firstOrNull { it.trim().startsWith("thinking_tick_ms=") }
-            ?.substringAfter("=")?.trim()?.toLongOrNull() ?: 1200L
-    }.getOrDefault(1200L).coerceIn(400L, 5000L)
+        if (!f.isFile) return@runCatching true
+        f.readLines().firstOrNull { it.trim().startsWith("ack_voice=") }
+            ?.substringAfter("=")?.trim() != "0"
+    }.getOrDefault(true)
 
     private fun log(msg: String) {
         runCatching {
@@ -226,9 +102,10 @@ class ThinkingTicker(private val context: Context) {
     }
 
     private companion object {
-        const val ACK_ASSET = "audio/ack_working.mp3"
         const val RATE = 24_000
-        const val AMPLITUDE = 9000.0
-        const val MAX_MS = 20_000L
+        const val AMPLITUDE = 4500.0
+        const val BEEP_HZ = 880.0
+        const val BEEP_MS = 70
+        /** 默认 50% 音量：原来的 9000 太响，用户要求减半。 */
     }
 }
