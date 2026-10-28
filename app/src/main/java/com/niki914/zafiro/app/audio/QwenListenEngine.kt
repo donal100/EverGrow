@@ -31,6 +31,8 @@ class QwenListenEngine(
     private val worker = Executors.newSingleThreadExecutor { r -> Thread(r, "qwen-asr").apply { isDaemon = true } }
 
     @Volatile private var active = false
+    /** stop() 之后仍允许把缓冲里那句话交付出去的窗口。 */
+    @Volatile private var draining = false
     @Volatile private var speechStartedAt = 0L
     @Volatile private var holdSeq = 0
     private val pending = StringBuilder()
@@ -55,12 +57,18 @@ class QwenListenEngine(
     }
 
     fun stop() {
+        // 收摊前先把缓冲里没等到静音的那句话交出去 —— 用户按关闭的那一刻，
+        // 缓冲里往往就是一整句；丢掉它，就是「我说了但没反应」。
+        draining = true
+        runCatching { recorder.forceEnd() }
         active = false
         inputWatch = null
         holdSeq++
         recorder.onVoiceActivity = null
         runCatching { recorder.stop() }
-        log("engine=qwen stopped")
+        log("engine=qwen stopped (draining)")
+        android.os.Handler(android.os.Looper.getMainLooper())
+            .postDelayed({ draining = false }, DRAIN_MS)
     }
 
     /**
@@ -131,7 +139,7 @@ class QwenListenEngine(
             file.delete()
             return
         }
-        if (!active) { file.delete(); return }
+        if (!active && !draining) { file.delete(); return }
         log("send: dur=" + fileMs + "ms rms=" + rms + " frames=" + speechFrames + "/" + totalFrames)
         worker.execute { transcribe(file, dur) }
     }
@@ -146,7 +154,7 @@ class QwenListenEngine(
             return
         }
         log("asr: " + ms + "ms dur=" + dur + "ms text=" + text.take(60))
-        if (!active) return
+        if (!active && !draining) return
         hold(text)
     }
 
@@ -161,7 +169,7 @@ class QwenListenEngine(
         val wait = holdMs()
         log("hold: wait=" + wait + "ms pending=" + pending.length)
         android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-            if (!active || seq != holdSeq) return@postDelayed
+            if ((!active && !draining) || seq != holdSeq) return@postDelayed
             val merged = pending.toString().trim()
             // 说到一半的句子不要交付：再等一轮，让下半句进来并进去。
             // 上限 MAX_EXTENDS 次，避免一句「嗯」把整轮对话拖住。
@@ -246,6 +254,8 @@ class QwenListenEngine(
         )
         /** 最多再等几轮。3 轮 ≈ 多等 2.7 秒，够说完一句话。 */
         const val MAX_EXTENDS = 3
+        /** 停止后留给「收尾那句」的交付窗口。 */
+        const val DRAIN_MS = 10_000L
         /** 低于这个 RMS 一律不发：噪声实测 13–69，语音 2000+。 */
         const val MIN_RMS = 300
         /** 至少这么多帧（每帧 100ms）要超过能量阈值，否则就是纯静音。 */

@@ -55,8 +55,6 @@ class UtteranceRecorder(private val filesDir: File) {
     private var noiseFloor = 800.0
 
     private var speakingDetected = false
-    private var aboveCount = 0
-    private var belowCount = 0
 
 
     private var record: AudioRecord? = null
@@ -111,7 +109,7 @@ class UtteranceRecorder(private val filesDir: File) {
         runCatching { preferredInput?.let { rec.setPreferredDevice(it) } }
         running = true
         runCatching { rec.startRecording() }
-        log("start ok: state=" + rec.state + " thr=" + dynamicThreshold().toInt())
+        log("start ok: state=" + rec.state + " onset=" + onsetThreshold().toInt())
         thread = Thread {
             val buf = ShortArray(1600)
             while (running) {
@@ -123,42 +121,47 @@ class UtteranceRecorder(private val filesDir: File) {
                     if (v > peak) peak = v
                 }
                 currentLevel = peak
-                // 噪声底：上升快、下降慢。
-                // 之前只在「判定没人说话」时更新，一旦误触发成 speaking 就再也学不到底噪；
-                // 而这台手机静音时的 peak 也有 700–1100，永远掉不到 ENERGY_OFF(450) 以下，
-                // 状态就卡在「还在说话」，一句话都交不出去（20:38 的日志就是这样）。
-                if (!speakingDetected || peak < endThreshold()) {
-                    noiseFloor = if (peak > noiseFloor) {
-                        noiseFloor * 0.7 + peak * 0.3
+                // ── 语音检测：一个底噪 + 一个时间戳 ─────────────────────────────
+                // 旧实现是「帧计数 + 双阈值 + 只在不说话时学底噪」，一旦把环境噪声
+                // 误判成开口，底噪就再也不更新，收尾条件（peak < 450）也永远不成立，
+                // 状态卡在「还在说话」，一句话都交不出去（20:38、09:23 两次都是这样）。
+                val now = System.currentTimeMillis()
+                if (calibratedFrames < CALIBRATION_FRAMES) {
+                    calibratedFrames++
+                    noiseFloor = if (calibratedFrames == 1) {
+                        peak.toDouble()
                     } else {
-                        noiseFloor * 0.98 + peak * 0.02
+                        noiseFloor * 0.7 + peak * 0.3
                     }
+                } else if (!speakingDetected) {
+                    noiseFloor = noiseFloor * 0.97 + peak * 0.03
                 }
-                if (peak > dynamicThreshold()) {
-                    aboveCount++
-                    belowCount = 0
-                } else if (peak < endThreshold()) {
-                    belowCount++
-                    aboveCount = 0
-                }
-                if (!speakingDetected && aboveCount >= ONSET_FRAMES) {
-                    speakingDetected = true
-                    // 记下真正的开口位置。识别器的 onBeginningOfSpeech 通常晚 0.5-1.5 秒，
-                    // 用它存盘会把整句开头切掉（实测丢了 "Okay, now translate"）。
-                    vadStart = totalWritten
-                    speakFrames = 0
-                    log("vad on peak=" + peak + " thr=" + dynamicThreshold().toInt() + " cb=" + (onVoiceActivity != null))
-                    runCatching { onVoiceActivity?.invoke(true) }
-                } else if (speakingDetected) {
-                    speakFrames++
-                    val silent = belowCount
-                    val forced = speakFrames >= MAX_SPEAK_FRAMES
-                    if (silent >= endFrames() || forced) {
-                        speakingDetected = false
-                        belowCount = 0
+                val onset = maxOf(MIN_LOUD.toDouble(), noiseFloor * ONSET_MULT)
+                val quiet = maxOf(MIN_QUIET.toDouble(), noiseFloor * END_MULT)
+                if (peak > quiet) lastLoudMs = now
+                if (!speakingDetected) {
+                    if (peak > onset) {
+                        speakingDetected = true
+                        vadStart = totalWritten
+                        startedSpeakingMs = now
+                        lastLoudMs = now
                         log(
-                            if (forced) "vad force end frames=" + speakFrames
-                            else "vad off silent=" + silent + " thr=" + endThreshold().toInt(),
+                            "vad on peak=" + peak + " floor=" + noiseFloor.toInt() +
+                                " onset=" + onset.toInt(),
+                        )
+                        runCatching { onVoiceActivity?.invoke(true) }
+                    }
+                } else {
+                    val silentFor = now - lastLoudMs
+                    val talkedFor = now - startedSpeakingMs
+                    if (silentFor >= silenceMs() || talkedFor >= MAX_UTTERANCE_MS) {
+                        speakingDetected = false
+                        log(
+                            if (talkedFor >= MAX_UTTERANCE_MS) {
+                                "vad cut len=" + talkedFor + "ms"
+                            } else {
+                                "vad off silent=" + silentFor + "ms floor=" + noiseFloor.toInt()
+                            },
                         )
                         runCatching { onVoiceActivity?.invoke(false) }
                     }
@@ -192,31 +195,28 @@ class UtteranceRecorder(private val filesDir: File) {
 
     /** 相对噪声底的判定阈值：至少 600，且不低于底噪的 2 倍。
      *  之前是 900 / 3 倍，安静房间里开始说话的第一个字常常达不到，被整段跳过。 */
-    private fun dynamicThreshold(): Double = maxOf(ENERGY_ON.toDouble(), noiseFloor * FLOOR_MULT)
+    /** 静音多久算说完（默认 900ms，voice_tuning.txt 的 vad_end_ms 可调）。 */
+    private fun silenceMs(): Long = runCatching {
+        val f = File(filesDir, "voice_tuning.txt")
+        if (!f.isFile) return@runCatching DEFAULT_SILENCE_MS
+        f.readLines().firstOrNull { it.trim().startsWith("vad_end_ms=") }
+            ?.substringAfter("=")?.trim()?.toLongOrNull() ?: DEFAULT_SILENCE_MS
+    }.getOrDefault(DEFAULT_SILENCE_MS)
 
-    /** 收尾阈值：比抬起阈值低一档，但必须高于实测底噪，否则静音也判成有声。 */
-    private fun endThreshold(): Double = maxOf(ENERGY_OFF.toDouble(), noiseFloor * 1.4)
+    /** 开口阈值：底噪的 1.6 倍，但不低于 MIN_LOUD。 */
+    private fun onsetThreshold(): Double = maxOf(MIN_LOUD.toDouble(), noiseFloor * ONSET_MULT)
 
-    /** 静音多久才算「说完了」。默认 1000ms（以前写死 6 帧 = 600ms）：
-     *  实测 600ms 会在句中换气的地方就把句子切断，后半句变成一段没有文字的碎片。
-     *  voice_tuning.txt 里 vad_end_ms=N 可以调，1 帧约 100ms。 */
-    private fun endFrames(): Int {
-        val ms = runCatching {
-            val f = File(filesDir, "voice_tuning.txt")
-            if (!f.isFile) return@runCatching 1000
-            f.readLines().firstOrNull { it.trim().startsWith("vad_end_ms=") }
-                ?.substringAfter("=")?.trim()?.toIntOrNull() ?: 1000
-        }.getOrDefault(1000)
-        return (ms / 100).coerceIn(1, 60)
+    /**
+     * 停止前把缓冲里还没收尾的那句话交出去。
+     * 用户按下关闭时，缓冲里往往就是一整句没等到静音的话 —— 丢掉它就是「没反应」。
+     */
+    fun forceEnd() {
+        if (!speakingDetected) return
+        speakingDetected = false
+        log("vad force end (stop)")
+        runCatching { onVoiceActivity?.invoke(false) }
     }
 
-    /** 现在是否有人声（电平触发用）。 */
-    fun isLoud(): Boolean = running && currentLevel > dynamicThreshold()
-
-    /** 打断用的「强信号」判断：2.5 倍阈值。普通环境噪声达不到，真说话可以。 */
-    fun isSpike(): Boolean = running && currentLevel > dynamicThreshold() * 2.5
-
-    /** 当前噪声底，诊断用。 */
     fun floor(): Int = noiseFloor.toInt()
 
     /** 存档用的 10 秒段缓冲。 */
@@ -267,7 +267,9 @@ class UtteranceRecorder(private val filesDir: File) {
 
     /** VAD 判定的开口位置（帧计数），比识别器早，用于存盘时保住句首。 */
     private var vadStart = -1L
-    private var speakFrames = 0
+    private var calibratedFrames = 0
+    private var lastLoudMs = 0L
+    private var startedSpeakingMs = 0L
 
     fun markSpeechStart() {
         speechStart = totalWritten
@@ -374,16 +376,20 @@ class UtteranceRecorder(private val filesDir: File) {
     private companion object {
         const val DIR = "utt"
         const val KEEP_FILES = 8
-        /** VAD 阈值（PCM16）。正常说话 2000-8000，静音 <300。 */
-        const val ENERGY_ON = 600
-        /** 噪声底倍数：2 倍即可分开人声与空调/风扇噪声 */
-        const val FLOOR_MULT = 2.0
-        const val ENERGY_OFF = 450
-        /** 每帧约 100ms：1 帧起说话即触发，6 帧（≈600ms）静音算说完。 */
-        const val ONSET_FRAMES = 1
-        /** 连续「说话」超过 200 帧（约 20 秒）强制收尾，防状态卡死。 */
-        const val MAX_SPEAK_FRAMES = 200
-        const val END_FRAMES = 6
+        /** 开头 15 帧（≈1.5 秒）用来量房间底噪。 */
+        const val CALIBRATION_FRAMES = 15
+        /** 开口阈值下限：再安静的房间也要高于这个，避免呼吸声触发。 */
+        const val MIN_LOUD = 1200
+        /** 静音阈值下限。 */
+        const val MIN_QUIET = 700
+        /** 开口：底噪的 1.6 倍。 */
+        const val ONSET_MULT = 1.35
+        /** 静音：底噪的 1.0 倍。 */
+        const val END_MULT = 1.05
+        /** 默认静音收尾 900ms。 */
+        const val DEFAULT_SILENCE_MS = 900L
+        /** 一直说不停时的最长一段，到点先切一段去识别，别等到用户松手。 */
+        const val MAX_UTTERANCE_MS = 12_000L
         const val MAX_AGE_MS = 20 * 60 * 1000L
         /** 滚动存档：每段 10 秒，只保留最近 5 分钟（≈10MB） */
         const val SEGMENT_SECONDS = 10
