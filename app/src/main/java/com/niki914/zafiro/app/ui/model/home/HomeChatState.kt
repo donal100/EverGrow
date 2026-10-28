@@ -205,6 +205,12 @@ fun HomeChatUiState.withClearedTransient() = copy(
 
 sealed interface HomeChatIntent {
     data class InputChanged(val value: String) : HomeChatIntent
+    /**
+     * 语音说出的一句话：写进输入框、立刻发送、再清空。
+     * 以前是「InputChanged + Send」两步，发完输入框里那句话还留着，
+     * 于是同一句会再发一次（用户截图里聊天气泡和输入框同时出现同一句话）。
+     */
+    data class VoiceUtterance(val text: String) : HomeChatIntent
     data object Send : HomeChatIntent
 
     /** 相册选图完成：追加一个待落盘项，实现侧完成后从 draft 读回。失败时该项消失。 */

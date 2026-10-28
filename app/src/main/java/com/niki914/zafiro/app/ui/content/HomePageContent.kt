@@ -469,12 +469,10 @@ fun HomePageContent(
     var translateCaption by remember { mutableStateOf("") }
     // 实时字幕：翻译器那边每句一行，这里跟着往下滚。
     var transcriptLines by remember { mutableStateOf<List<String>>(emptyList()) }
-    var pendingUtterance by remember { mutableStateOf<String?>(null) }
     val latestListenMode by rememberUpdatedState(listenMode)
     val callModeController = remember {
         CallModeController(voiceContext) { text ->
-            latestViewModel.sendIntent(HomeChatIntent.InputChanged(text))
-            pendingUtterance = text
+            latestViewModel.sendIntent(HomeChatIntent.VoiceUtterance(text))
         }
     }
     // 页面销毁什么都不做：发言器和它的作用域都是进程级的。
@@ -506,15 +504,6 @@ fun HomePageContent(
         ).show()
     }
 
-    // 转写文本要等它真的落进输入框状态再 Send，否则发出去的是上一轮草稿
-    LaunchedEffect(pendingUtterance, uiState.input, uiState.isGenerating) {
-        val utterance = pendingUtterance ?: return@LaunchedEffect
-        if (uiState.isGenerating) return@LaunchedEffect
-        if (uiState.input.trim() == utterance.trim()) {
-            pendingUtterance = null
-            latestViewModel.sendIntent(HomeChatIntent.Send)
-        }
-    }
     // 播报只有一个归属：agent 自己（py_speak_qwen）。
     // app 侧的 VoiceOutbox 一律不念 —— 两套系统各自判断「该不该我说话」，
     // 结果就是重叠、抢麦、以及那次「app 以为工具会念、工具没念」的静音。

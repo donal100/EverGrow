@@ -104,6 +104,7 @@ class HomeChatViewModel internal constructor(
             is HomeChatIntent.InputChanged -> onInputChanged(intent.value)
             HomeChatIntent.ToggleVoiceMode -> updateState { copy(voiceMode = !voiceMode) }
             HomeChatIntent.Send -> sendCurrentInput()
+            is HomeChatIntent.VoiceUtterance -> voiceUtterance(intent.text)
             is HomeChatIntent.ImageAttached -> attachImage(intent.uri)
             is HomeChatIntent.ImageRemoved -> removeImage(intent.id)
             is HomeChatIntent.FileAttached -> attachFile(intent.uri)
@@ -425,6 +426,15 @@ class HomeChatViewModel internal constructor(
     }
 
     // ── 输入 ────────────────────────────────────────────────────────────────
+
+    /** 语音一句话：一次做完「填、发、清空」，不给第二次发送留机会。 */
+    private suspend fun voiceUtterance(text: String) {
+        val body = text.trim()
+        if (body.isEmpty()) return
+        onInputChanged(body)
+        sendCurrentInput()
+        onInputChanged("")
+    }
 
     private fun onInputChanged(value: String) {
         updateState { copy(input = value) }
