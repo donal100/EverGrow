@@ -30,7 +30,7 @@ class ThinkingTicker(private val context: Context) {
     fun acknowledge() {
         if (!enabled()) return
         play(beep)
-        log("ack: beep")
+        log("ack: beep amp=" + AMPLITUDE.toInt())
     }
 
     /** 老接口：循环已经没有了，保留空实现以免调用方改动。 */
@@ -103,9 +103,9 @@ class ThinkingTicker(private val context: Context) {
 
     private companion object {
         const val RATE = 24_000
-        const val AMPLITUDE = 4500.0
+        const val AMPLITUDE = 2700.0
         const val BEEP_HZ = 880.0
         const val BEEP_MS = 70
-        /** 默认 50% 音量：原来的 9000 太响，用户要求减半。 */
+        /** 30% 音量（原来 9000，先减半到 4500，再降到 2700）。 */
     }
 }
