@@ -118,8 +118,21 @@ class ThinkingTicker(private val context: Context) {
         }
         player = mp
         val ok = runCatching { mp.start() }.isSuccess
+        if (ok) markAckWindow(mp.duration.toLong() + 600L)
         log(if (ok) "ack: working-on-it" else "ack: start failed")
         return ok
+    }
+
+    /**
+     * 这句回执也是「我的声音」：写进 speech_window.txt，麦克风再听到它时按回声丢掉。
+     * 不写就会出现「它听见自己说 I am working on it，然后把它当成用户的请求」。
+     */
+    private fun markAckWindow(holdMs: Long) {
+        runCatching {
+            val now = System.currentTimeMillis()
+            File(context.filesDir, "speech_window.txt")
+                .writeText(now.toString() + " " + (now + holdMs.coerceAtLeast(400L)))
+        }
     }
 
     fun stop() {
