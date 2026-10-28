@@ -5,6 +5,7 @@ import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioTrack
+import android.media.MediaPlayer
 import android.os.Handler
 import android.os.Looper
 import java.io.File
@@ -27,6 +28,7 @@ class ThinkingTicker(private val context: Context) {
     private val main = Handler(Looper.getMainLooper())
     @Volatile private var running = false
     @Volatile private var startedAt = 0L
+    private var player: MediaPlayer? = null
 
     private val beep: ShortArray by lazy { tone(880.0, 60) }
     private val beepLow: ShortArray by lazy { tone(660.0, 50) }
@@ -57,19 +59,72 @@ class ThinkingTicker(private val context: Context) {
         now in start..(end + 2_500L)
     }.getOrDefault(false)
 
+    /**
+     * 收到用户的话了：念一句「I am working on it」，比嘀一声更像人在回应。
+     * 素材在 assets/audio/ack_working.mp3（qwen3-tts-flash / Serena 合成），
+     * 本地播放、不走网络，延迟只有几毫秒。
+     */
     fun acknowledge() {
-        if (!enabled()) return
-        startedAt = System.currentTimeMillis()
-        play(beep)
-        main.postDelayed({ play(beep) }, 130L)
-        if (!running) {
+        if (!ackEnabled()) return
+        if (!playWorkingOnIt()) {
+            // 素材缺失时退回原来的两声提示音
+            startedAt = System.currentTimeMillis()
+            play(beep)
+            main.postDelayed({ play(beep) }, 130L)
+        }
+        if (!running && tickEnabled()) {
             running = true
             main.postDelayed(tick, 900L)
             log("tick start every " + intervalMs() + "ms (vol=" + mediaVolume() + ")")
         }
     }
 
+    /** 播放「I am working on it」素材；素材缺失或播放失败返回 false。 */
+    private fun playWorkingOnIt(): Boolean {
+        runCatching { player?.release() }
+        player = null
+        val file = runCatching {
+            val out = File(context.cacheDir, "ack_working.mp3")
+            if (!out.isFile || out.length() == 0L) {
+                context.assets.open(ACK_ASSET).use { input ->
+                    out.outputStream().use { input.copyTo(it) }
+                }
+            }
+            out
+        }.getOrNull()
+        if (file == null || !file.isFile || file.length() == 0L) {
+            log("ack: asset missing (" + ACK_ASSET + ")")
+            return false
+        }
+        val mp = runCatching {
+            MediaPlayer().apply {
+                setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .build(),
+                )
+                setDataSource(file.absolutePath)
+                setOnCompletionListener { p ->
+                    runCatching { p.release() }
+                    if (player === p) player = null
+                }
+                prepare()
+            }
+        }.getOrNull()
+        if (mp == null) {
+            log("ack: prepare failed")
+            return false
+        }
+        player = mp
+        val ok = runCatching { mp.start() }.isSuccess
+        log(if (ok) "ack: working-on-it" else "ack: start failed")
+        return ok
+    }
+
     fun stop() {
+        runCatching { player?.release() }
+        player = null
         if (!running) return
         running = false
         main.removeCallbacks(tick)
@@ -129,12 +184,18 @@ class ThinkingTicker(private val context: Context) {
         am.getStreamVolume(AudioManager.STREAM_VOICE_CALL)
     }.getOrDefault(-1)
 
-    private fun enabled(): Boolean = runCatching {
+    /** 口语回执开关：voice_tuning.txt 的 ack_voice=0 关闭（默认开）。 */
+    private fun ackEnabled(): Boolean = tuningValue("ack_voice", "1") != "0"
+
+    /** 持续的提示音循环：thinking_tick=0 关闭（默认关，口语回执已经够了）。 */
+    private fun tickEnabled(): Boolean = tuningValue("thinking_tick", "0") != "0"
+
+    private fun tuningValue(key: String, def: String): String = runCatching {
         val f = File(context.filesDir, "voice_tuning.txt")
-        if (!f.isFile) return@runCatching true
-        f.readLines().firstOrNull { it.trim().startsWith("thinking_tick=") }
-            ?.substringAfter("=")?.trim() != "0"
-    }.getOrDefault(true)
+        if (!f.isFile) return@runCatching def
+        f.readLines().firstOrNull { it.trim().startsWith(key + "=") }
+            ?.substringAfter("=")?.trim() ?: def
+    }.getOrDefault(def)
 
     private fun intervalMs(): Long = runCatching {
         val f = File(context.filesDir, "voice_tuning.txt")
@@ -152,6 +213,7 @@ class ThinkingTicker(private val context: Context) {
     }
 
     private companion object {
+        const val ACK_ASSET = "audio/ack_working.mp3"
         const val RATE = 24_000
         const val AMPLITUDE = 9000.0
         const val MAX_MS = 20_000L
