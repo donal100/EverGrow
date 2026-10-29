@@ -218,6 +218,17 @@ class RealtimeTranslator(
     private var micSumSq = 0L
     private var micFrames = 0
 
+    /** 上行放大倍数，voice_tuning.txt 的 translate_gain（默认 3.0，范围 1..8）。 */
+    private val uplinkGain: Double by lazy {
+        val raw = runCatching {
+            File(ctx.filesDir, "voice_tuning.txt").readLines()
+                .firstOrNull { it.trim().startsWith("translate_gain=") }
+                ?.substringAfter("=")?.trim()?.toDoubleOrNull()
+        }.getOrNull() ?: 3.0
+        Logger.i(LOG_TAG, "uplink gain=" + raw)
+        raw.coerceIn(1.0, 8.0)
+    }
+
     private fun startMic() {
         if (micStarted) return
         micStarted = true
@@ -276,6 +287,16 @@ class RealtimeTranslator(
                 if (muted) continue
                 // 播报期间不送音频：否则模型会听见自己刚说的译文，再「翻译」一遍。
                 if (halfDuplex && !textOnly && speaking) continue
+                // 上行增益：这一路实测上行 rms 只有 136（峰值 10223），
+                // 服务器的 VAD 因此常常不触发，结果「麦克风有声、模型没反应」。
+                // 放大后再送，峰值仍留有余量；translate_gain 可调，1 = 不放大。
+                val gain = uplinkGain
+                if (gain > 1.0) {
+                    for (i in 0 until n) {
+                        val v = (buf[i] * gain).toInt().coerceIn(-32768, 32767)
+                        buf[i] = v.toShort()
+                    }
+                }
                 val bytes = ByteArray(n * 2)
                 var p = 0
                 for (i in 0 until n) {
