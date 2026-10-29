@@ -804,8 +804,8 @@ fun HomePageContent(
                     },
                 ),
                 PageChromeMenuItem(
-                    key = "translate_cantonese",
-                    title = "Translate Cantonese → English (subtitles)",
+                    key = "translate_any",
+                    title = "Translate anything → English (subtitles)",
                     onClick = {
                         if (latestUiState.isConfigMenuVisible) {
                             latestViewModel.sendIntent(HomeChatIntent.DismissConfigMenu)
@@ -816,32 +816,13 @@ fun HomePageContent(
                         if (!granted) {
                             Toast.makeText(locationContext, "Microphone permission needed", Toast.LENGTH_SHORT).show()
                         } else {
-                            Logger.i("niki914_zafiro_TranslateUi", "menu pick: yue-en")
-                            translateMode = "yue-en"
-                            listenMode = false
-                            voiceSpeaker.stop()
-                            Toast.makeText(locationContext, "Cantonese → English subtitles", Toast.LENGTH_SHORT).show()
-                        }
-                    },
-                ),
-                PageChromeMenuItem(
-                    key = "translate_earpiece",
-                    title = "Translate Mandarin → English (subtitles)",
-                    onClick = {
-                        if (latestUiState.isConfigMenuVisible) {
-                            latestViewModel.sendIntent(HomeChatIntent.DismissConfigMenu)
-                        }
-                        val granted = locationContext.checkSelfPermission(
-                            Manifest.permission.RECORD_AUDIO,
-                        ) == PackageManager.PERMISSION_GRANTED
-                        if (!granted) {
-                            Toast.makeText(locationContext, "Microphone permission needed", Toast.LENGTH_SHORT).show()
-                        } else {
-                            Logger.i("niki914_zafiro_TranslateUi", "menu pick: to-english")
+                            // 源语言交给模型判断：同一套 instruction 覆盖粤语/普通话/其它，
+                            // 所以菜单里不再分「粤语」「普通话」两项。
+                            Logger.i("niki914_zafiro_TranslateUi", "menu pick: to-english (any source)")
                             translateMode = "to-english"
                             listenMode = false
                             voiceSpeaker.stop()
-                            Toast.makeText(locationContext, "Mandarin → English subtitles", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(locationContext, "Anything → English subtitles", Toast.LENGTH_SHORT).show()
                         }
                     },
                 ),
