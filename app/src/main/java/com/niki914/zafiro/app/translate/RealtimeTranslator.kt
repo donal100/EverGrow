@@ -223,15 +223,24 @@ class RealtimeTranslator(
         micStarted = true
         val minBuf = AudioRecord.getMinBufferSize(
             16_000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
+        // 音源跟着设备走：USB 麦克风上 VOICE_COMMUNICATION 会被增益/降噪压掉一大半
+        // （实测同一段环境声 rms 262，而 MIC 是 615、峰值 10965），
+        // 结果就是「没听见就编字幕」。内置麦克风仍用 VOICE_COMMUNICATION 以保留 AEC。
+        val usbMicDev = AudioRouter.usbMic(ctx)
+        val source = if (usbMicDev != null) {
+            MediaRecorder.AudioSource.MIC
+        } else {
+            MediaRecorder.AudioSource.VOICE_COMMUNICATION
+        }
         val rec = runCatching {
-            AudioRecord(MediaRecorder.AudioSource.VOICE_COMMUNICATION, 16_000,
+            AudioRecord(source, 16_000,
                 AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, maxOf(minBuf, 32_000))
         }.getOrNull()
         if (rec == null) { Logger.w(LOG_TAG, "mic create failed"); return }
         if (rec.state != AudioRecord.STATE_INITIALIZED) {
             Logger.w(LOG_TAG, "mic not initialized state=" + rec.state); rec.release(); return
         }
-        Logger.i(LOG_TAG, "mic recording source=VOICE_COMMUNICATION")
+        Logger.i(LOG_TAG, "mic recording source=" + (if (source == MediaRecorder.AudioSource.MIC) "MIC" else "VOICE_COMMUNICATION"))
         // 两个麦克风分时段用，不能同时用（实测两个 AudioRecord 拿到的是同一路音频）：
         //   听的时候用耳机麦克风（离说话的人最近）；
         //   播报的时候耳机链路必须放下（否则耳机没声音），这段时间改用手机麦克风，
@@ -244,11 +253,10 @@ class RealtimeTranslator(
             runCatching { rec.setPreferredDevice(earbudMic) }
         } else {
             // USB 麦克风优先（插着就用），其次手机内置
-            val usb = AudioRouter.usbMic(ctx)
-            val mic = usb ?: AudioRouter.builtInMic(ctx)
+            val mic = usbMicDev ?: AudioRouter.builtInMic(ctx)
             Logger.i(
                 LOG_TAG,
-                "mic pref=" + (if (usb != null) "usb" else "phone") +
+                "mic pref=" + (if (usbMicDev != null) "usb" else "phone") +
                     " type=" + (mic?.type ?: -1) + " name=" + (mic?.productName ?: "?"),
             )
             runCatching { mic?.let { rec.setPreferredDevice(it) } }

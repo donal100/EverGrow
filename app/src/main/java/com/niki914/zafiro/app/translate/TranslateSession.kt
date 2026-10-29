@@ -41,10 +41,22 @@ class TranslateSession(
         running = true
         val minBuf = AudioRecord.getMinBufferSize(
             sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
-        // VOICE_COMMUNICATION：外放+通话那种路径，系统 AEC 才对它生效
+        // 音源要跟着设备走。实测（Hikvision USB 麦克风，同一段环境声）：
+        //   MIC                  rms 615  peak 10965
+        //   VOICE_COMMUNICATION  rms 262  peak 3027
+        //   VOICE_RECOGNITION    rms  39  peak  467
+        // USB 这条路上 VOICE_COMMUNICATION 的增益/降噪把信号压掉一大半，
+        // 模型于是「听不见」就自己编字幕。内置麦克风仍用 VOICE_COMMUNICATION，
+        // 因为外放时只有那条路有系统 AEC。
+        val usb = AudioRouter.usbMic(ctx)
+        val source = if (usb != null) {
+            MediaRecorder.AudioSource.MIC
+        } else {
+            MediaRecorder.AudioSource.VOICE_COMMUNICATION
+        }
         val rec = runCatching {
             AudioRecord(
-                MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+                source,
                 sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT,
                 maxOf(minBuf, sampleRate * 2),
             )
@@ -57,7 +69,7 @@ class TranslateSession(
         // 插着耳机时系统默认会选耳机麦克风，但这里要的是离说话人近的那路：
         // USB 麦克风优先（插着就用），否则手机内置麦克风。
         runCatching {
-            val mic = AudioRouter.preferredMic(ctx)
+            val mic = usb ?: AudioRouter.builtInMic(ctx)
             mic?.let { rec.setPreferredDevice(it) }
             Logger.i(
                 "niki914_zafiro_TranslateSession",
