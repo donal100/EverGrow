@@ -284,7 +284,21 @@ class RealtimeTranslator(
         val s = socket ?: return
         val ok = runCatching {
             s.send(JSONObject().put("type", "input_audio_buffer.commit").toString())
-            s.send(JSONObject().put("type", "response.create").toString())
+            // response.create 要自带配置：只发 {"type":"response.create"} 时，
+            // 手动提交这条路上服务端会返回一个空回复（16:56 实测 audioDeltas=0、无文字）。
+            val response = JSONObject()
+                .put(
+                    "modalities",
+                    if (textOnly) JSONArray().put("text") else JSONArray().put("text").put("audio"),
+                )
+                .put("instructions", instructions)
+            if (!textOnly) response.put("voice", voice).put("output_audio_format", "pcm16")
+            s.send(
+                JSONObject()
+                    .put("type", "response.create")
+                    .put("response", response)
+                    .toString(),
+            )
         }.isSuccess
         Logger.i(
             LOG_TAG,
