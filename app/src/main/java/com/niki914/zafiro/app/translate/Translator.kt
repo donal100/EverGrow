@@ -66,6 +66,8 @@ object Translator {
     // ——— 实时字幕（像片尾字幕一样往上滚） ———
     // 每句一行：先是被听见的原话，然后是译文。UI 只读这个列表，不管翻译怎么实现。
     private val lines = java.util.concurrent.CopyOnWriteArrayList<String>()
+    /** 上一行字幕：用来吃掉连续重复。 */
+    @Volatile private var lastLine: String = ""
 
     /** 每次加行都加一，UI 靠它知道要不要重绘。 */
     @Volatile var linesVersion: Int = 0
@@ -83,6 +85,9 @@ object Translator {
     private fun pushLine(raw: String) {
         val text = raw.trim()
         if (text.isEmpty()) return
+        // 同一句连着出现就不再加：模型在听不懂的音频上会卡住反复吐同一行
+        // （实测电视声里连着六行 "It's not."），那既不是字幕也是噪音。
+        if (text == lastLine) return
         // 不再按长度过滤：字幕要和耳机里听到的一字不差，哪怕它只说了一个字。
         runCatching {
             lines.add(text)
