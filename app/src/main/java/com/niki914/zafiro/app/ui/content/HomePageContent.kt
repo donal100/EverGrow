@@ -1522,11 +1522,17 @@ private fun HomePageContentBody(
                     .padding(horizontal = 14.dp, vertical = 12.dp)
                     .verticalScroll(captionScroll),
             ) {
-                transcriptLines.asReversed().forEach { line ->
+                transcriptLines.asReversed().forEachIndexed { index, line ->
+                    // 最新一句单独上色：字幕在滚动，眼睛需要立刻知道哪一行是「刚说的」。
+                    val newest = index == 0
                     Text(
                         text = line,
                         style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurface,
+                        color = if (newest) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f)
+                        },
                         modifier = Modifier.padding(vertical = 3.dp),
                     )
                 }
