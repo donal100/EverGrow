@@ -5,6 +5,7 @@ import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.media.audiofx.AcousticEchoCanceler
+import com.niki914.logging.Logger
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -53,8 +54,16 @@ class TranslateSession(
             return
         }
         record = rec
-        // 插着耳机时系统默认会选耳机麦克风，但这里要的是手机自己的麦克风
-        runCatching { AudioRouter.builtInMic(ctx)?.let { rec.setPreferredDevice(it) } }
+        // 插着耳机时系统默认会选耳机麦克风，但这里要的是离说话人近的那路：
+        // USB 麦克风优先（插着就用），否则手机内置麦克风。
+        runCatching {
+            val mic = AudioRouter.preferredMic(ctx)
+            mic?.let { rec.setPreferredDevice(it) }
+            Logger.i(
+                "niki914_zafiro_TranslateSession",
+                "mic pref type=" + (mic?.type ?: -1) + " name=" + (mic?.productName ?: "?"),
+            )
+        }
         runCatching {
             if (AcousticEchoCanceler.isAvailable()) {
                 aec = AcousticEchoCanceler.create(rec.audioSessionId)?.also { it.enabled = true }

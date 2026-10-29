@@ -243,8 +243,15 @@ class RealtimeTranslator(
             Logger.i(LOG_TAG, "mic pref=earbuds type=" + earbudMic.type + " name=" + earbudMic.productName + " scoOn=" + sco)
             runCatching { rec.setPreferredDevice(earbudMic) }
         } else {
-            Logger.i(LOG_TAG, "mic pref=phone (playback window or no earbud mic)")
-            runCatching { AudioRouter.builtInMic(ctx)?.let { rec.setPreferredDevice(it) } }
+            // USB 麦克风优先（插着就用），其次手机内置
+            val usb = AudioRouter.usbMic(ctx)
+            val mic = usb ?: AudioRouter.builtInMic(ctx)
+            Logger.i(
+                LOG_TAG,
+                "mic pref=" + (if (usb != null) "usb" else "phone") +
+                    " type=" + (mic?.type ?: -1) + " name=" + (mic?.productName ?: "?"),
+            )
+            runCatching { mic?.let { rec.setPreferredDevice(it) } }
         }
         record = rec
         runCatching { rec.startRecording() }

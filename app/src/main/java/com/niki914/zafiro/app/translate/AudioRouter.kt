@@ -134,6 +134,22 @@ object AudioRouter {
     }
 
     /** 手机内置麦克风：即使插着耳机也坚持用它。 */
+    /**
+     * USB 输入（会议麦克风、声卡）：比手机内置麦克风更近、更宽，也不占蓝牙链路。
+     * 用户要求：插着 USB 就用 USB，没插才回落到手机麦克风。
+     */
+    fun usbMic(ctx: Context): AudioDeviceInfo? {
+        val am = ctx.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return null
+        return am.getDevices(AudioManager.GET_DEVICES_INPUTS).firstOrNull { d ->
+            d.type == AudioDeviceInfo.TYPE_USB_DEVICE ||
+                d.type == AudioDeviceInfo.TYPE_USB_HEADSET ||
+                d.type == AudioDeviceInfo.TYPE_USB_ACCESSORY
+        }
+    }
+
+    /** 翻译/听写默认输入：USB 优先，否则手机内置麦克风。 */
+    fun preferredMic(ctx: Context): AudioDeviceInfo? = usbMic(ctx) ?: builtInMic(ctx)
+
     fun builtInMic(ctx: Context): AudioDeviceInfo? {
         val am = ctx.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return null
         return am.getDevices(AudioManager.GET_DEVICES_INPUTS)
