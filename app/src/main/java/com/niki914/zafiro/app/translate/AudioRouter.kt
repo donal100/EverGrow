@@ -3,6 +3,7 @@ package com.niki914.zafiro.app.translate
 import android.content.Context
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
+import com.niki914.logging.Logger
 
 /**
  * 耳机单向口译的音频路由。
@@ -15,6 +16,8 @@ import android.media.AudioManager
  * 延迟也更明显，这点没办法，是蓝牙协议的问题。
  */
 object AudioRouter {
+
+    private const val TAG = "niki914_zafiro_AudioRouter"
 
     fun routeToEarphones(ctx: Context): String {
         val am = ctx.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return "no audio service"
@@ -149,6 +152,36 @@ object AudioRouter {
 
     /** 翻译/听写默认输入：USB 优先，否则手机内置麦克风。 */
     fun preferredMic(ctx: Context): AudioDeviceInfo? = usbMic(ctx) ?: builtInMic(ctx)
+
+    /**
+     * 等一会儿再判「有没有 USB 麦克风」。
+     *
+     * 插上之后系统要过一小会儿才会把它放进输入列表，而翻译只在开始时查一次，
+     * 于是「刚插上就开翻译」会被判成没有 USB（14:56 那次就是这样退回手机麦克风的）。
+     * 这里每 250ms 重查一次，最多等 timeoutMs，并把看到几个输入记进日志。
+     */
+    fun usbMicWait(ctx: Context, timeoutMs: Long = 1500L): AudioDeviceInfo? {
+        val am = ctx.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return null
+        val deadline = System.currentTimeMillis() + timeoutMs
+        var tries = 0
+        while (true) {
+            tries++
+            val ins = runCatching { am.getDevices(AudioManager.GET_DEVICES_INPUTS) }.getOrNull()
+            val usb = ins?.firstOrNull { d ->
+                d.type == AudioDeviceInfo.TYPE_USB_DEVICE ||
+                    d.type == AudioDeviceInfo.TYPE_USB_HEADSET ||
+                    d.type == AudioDeviceInfo.TYPE_USB_ACCESSORY
+            }
+            Logger.i(
+                TAG,
+                "usbMicWait try=" + tries + " inputs=" + (ins?.size ?: -1) +
+                    " usb=" + (usb != null),
+            )
+            if (usb != null) return usb
+            if (System.currentTimeMillis() >= deadline) return null
+            runCatching { Thread.sleep(250L) }
+        }
+    }
 
     fun builtInMic(ctx: Context): AudioDeviceInfo? {
         val am = ctx.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return null

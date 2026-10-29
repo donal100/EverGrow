@@ -48,7 +48,7 @@ class TranslateSession(
         // USB 这条路上 VOICE_COMMUNICATION 的增益/降噪把信号压掉一大半，
         // 模型于是「听不见」就自己编字幕。内置麦克风仍用 VOICE_COMMUNICATION，
         // 因为外放时只有那条路有系统 AEC。
-        val usb = AudioRouter.usbMic(ctx)
+        val usb = AudioRouter.usbMicWait(ctx)
         // 一律 MIC。实测（同一段环境声，手机内置麦克风）：
         //   MIC                  rms 699  peak 4229
         //   VOICE_COMMUNICATION  rms  77  peak  527
