@@ -125,11 +125,16 @@ class RealtimeTranslator(
                     // 静音 900ms 才算一句说完，阈值略降，让小声的收音也能触发。
                     .put(
                         "turn_detection",
-                        JSONObject()
-                            .put("type", "server_vad")
-                            .put("threshold", 0.4)
-                            .put("prefix_padding_ms", 300)
-                            .put("silence_duration_ms", 900),
+                        if (vadMode == "server") {
+                            JSONObject()
+                                .put("type", "server_vad")
+                                .put("threshold", 0.4)
+                                .put("prefix_padding_ms", 300)
+                                .put("silence_duration_ms", 900)
+                        } else {
+                            // 本地自己决定什么时候算一句话：关掉服务端 VAD
+                            JSONObject.NULL
+                        },
                     )
                 if (!textOnly) {
                     session.put("voice", voice).put("output_audio_format", "pcm16")
@@ -190,8 +195,12 @@ class RealtimeTranslator(
                 // 文字一直没到（纯音频回复）也要定边，否则这一句会永远攒在 pending 里。
                 if (panSplit && panSide == 0) decide(lastPanSide)
                 if (transcript.isNotEmpty()) {
-                    onTranscript(transcript.toString())
+                    val text = trimOverlap(lastCaption, transcript.toString())
                     transcript.setLength(0)
+                    if (text.isNotBlank()) {
+                        lastCaption = text
+                        onTranscript(text)
+                    }
                 }
             }
             "conversation.item.input_audio_transcription.completed" -> {
@@ -239,6 +248,70 @@ class RealtimeTranslator(
         Logger.i(LOG_TAG, "uplink gain=" + raw)
         raw.coerceIn(1.0, 8.0)
     }
+
+    private fun tuning(key: String, def: String): String = runCatching {
+        File(ctx.filesDir, "voice_tuning.txt").readLines()
+            .firstOrNull { it.trim().startsWith(key + "=") }
+            ?.substringAfter("=")?.trim() ?: def
+    }.getOrDefault(def)
+
+    /**
+     * 切句策略。server＝交给服务端 VAD（默认，已在用）；
+     * hybrid＝本地判断，4 秒或 900ms 静音谁先到就提交一次；
+     * timer＝纯 4 秒。
+     *
+     * 为什么要本地：服务端的 VAD 按绝对音量判断，USB 麦克风上行只有 rms 130 左右，
+     * 不放大压根不触发（audio 0 samples out）。本地判断跟自己房间的底噪比，不受绝对音量影响。
+     */
+    private val vadMode: String by lazy {
+        val m = tuning("translate_vad", "server").lowercase()
+        Logger.i(LOG_TAG, "vad mode=" + m)
+        if (m == "hybrid" || m == "timer") m else "server"
+    }
+
+    /** 上一次提交之后又攒够一帧就算有话说；用来避免空提交。 */
+    @Volatile private var samplesSinceCommit = 0L
+    @Volatile private var lastCommitAt = 0L
+    private var vadFloor = 300.0
+    @Volatile private var lastVoiceAt = 0L
+    @Volatile private var vadSpeaking = false
+
+    /** 提交当前缓冲并要一句回答。失败只记日志，不抛。 */
+    private fun commitTurn(reason: String) {
+        if (samplesSinceCommit < 4_800L) {   // <0.3s 不值得提交
+            return
+        }
+        val s = socket ?: return
+        val ok = runCatching {
+            s.send(JSONObject().put("type", "input_audio_buffer.commit").toString())
+            s.send(JSONObject().put("type", "response.create").toString())
+        }.isSuccess
+        Logger.i(
+            LOG_TAG,
+            "commit (" + reason + ") samples=" + samplesSinceCommit + " ok=" + ok,
+        )
+        samplesSinceCommit = 0
+        lastCommitAt = System.currentTimeMillis()
+    }
+
+    /** 上一句的结尾和这一句的开头重叠时，把重复部分切掉（最多切 8 个词）。 */
+    private fun trimOverlap(prev: String, next: String): String {
+        val pw = prev.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+        val nw = next.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+        if (pw.isEmpty() || nw.isEmpty()) return next
+        var best = 0
+        val max = minOf(8, pw.size, nw.size)
+        for (k in max downTo 1) {
+            val tail = pw.subList(pw.size - k, pw.size).joinToString(" ").lowercase()
+            val head = nw.subList(0, k).joinToString(" ").lowercase()
+            if (tail == head) { best = k; break }
+        }
+        if (best == 0) return next
+        Logger.i(LOG_TAG, "dedupe trimmed " + best + " words")
+        return nw.subList(best, nw.size).joinToString(" ")
+    }
+
+    @Volatile private var lastCaption: String = ""
 
     private fun startMic() {
         if (micStarted) return
@@ -324,6 +397,32 @@ class RealtimeTranslator(
                     val rms = if (micFrames > 0) Math.sqrt(micSumSq.toDouble() / micFrames).toInt() else 0
                     Logger.i(LOG_TAG, "mic level rms=" + rms + " frames=" + micFrames)
                     micChunks = 0; micSumSq = 0L; micFrames = 0
+                }
+                // 本地切句（vadMode != server）：跟自己的底噪比，不看绝对音量。
+                if (vadMode != "server") {
+                    var peak = 0
+                    for (i in 0 until n) {
+                        val a = kotlin.math.abs(buf[i].toInt())
+                        if (a > peak) peak = a
+                    }
+                    val now = System.currentTimeMillis()
+                    val onset = kotlin.math.max(1200.0, vadFloor * 1.35)
+                    val quietThr = kotlin.math.max(700.0, vadFloor * 1.05)
+                    if (!vadSpeaking) vadFloor = vadFloor * 0.97 + peak * 0.03
+                    if (peak > quietThr) lastVoiceAt = now
+                    if (!vadSpeaking && peak > onset) {
+                        vadSpeaking = true
+                        lastVoiceAt = now
+                        Logger.i(LOG_TAG, "vad local on peak=" + peak + " floor=" + vadFloor.toInt())
+                    } else if (vadSpeaking && now - lastVoiceAt >= 900L) {
+                        vadSpeaking = false
+                        Logger.i(LOG_TAG, "vad local off silent=900ms")
+                        commitTurn("silence")
+                    }
+                    samplesSinceCommit += n
+                    if (now - lastCommitAt >= 4_000L && samplesSinceCommit >= 16_000L) {
+                        commitTurn("timer")
+                    }
                 }
                 val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
                 val sent = socket?.send(JSONObject().put("type", "input_audio_buffer.append").put("audio", b64).toString()) == true
