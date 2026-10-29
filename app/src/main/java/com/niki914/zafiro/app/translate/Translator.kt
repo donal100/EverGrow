@@ -152,21 +152,22 @@ object Translator {
         // 双向走外放（两个人都要听见），单向走耳机
         val twoWay = mode == "two-way" || mode == "two-way-yue"
         routing = if (twoWay) "speaker" else AudioRouter.routeToEarphones(app)
+        // 单人字幕只有一种：听什么都译成英文。
+        // 源语言不用我们指定 —— 模型自己听得出来（实测输入转写直接给粤字）；
+        // 之前分「粤语」「普通话」两套 instruction，只是重复了同一件事。
+        // 真正需要区分的只有双向（回话用哪种语言、用哪个音色）。
         val instructions = when (mode) {
             "to-chinese" ->
-                "You are a real-time interpreter. Whatever you hear, translate it into Simplified Chinese and speak only the translation, briefly and naturally."
-            // 粤语：模型是听音频的，语言靠 instruction 指定，不必改协议。
-            // 香港人讲话常夹英文词，所以要求「夹英文也照译」，不要因为半句英文就整句放弃。
-            "yue-en" ->
-                "You are a Cantonese-to-English interpreter. Whatever you hear, translate it into natural English and output English text only. " +
-                "The speaker may mix in English words or switch languages mid-sentence: still translate the whole utterance into English, keeping names and technical terms as they are."
+                "You are a real-time interpreter. Whatever you hear, translate it into Simplified Chinese and output the translation only, briefly and naturally."
             "two-way" ->
                 "You are a two-way interpreter between two people, Mandarin and English. If you hear Mandarin, translate it into English. If you hear English, translate it into Simplified Chinese. Say only the translation, briefly and naturally, with no commentary. If the audio is noise, echo, music or unclear speech, output nothing at all."
             "two-way-yue" ->
                 "You are a two-way interpreter between two people, Cantonese and English. If you hear Cantonese, translate it into natural English. If you hear English, translate it into spoken Cantonese as used in Hong Kong, not Standard Written Chinese. Say only the translation, briefly and naturally, with no commentary. If the audio is noise, echo, music or unclear speech, output nothing at all."
             else ->
-                "You are a Mandarin-to-English interpreter. Whatever you hear, translate it into natural English and output English text only. " +
-                "Ignore filler and false starts; keep names and technical terms as they are."
+                // to-english / yue-en 共用这一段：源语言交给模型判断。
+                "You are a real-time interpreter. Whatever language you hear — Cantonese, Mandarin or anything else — translate it into natural English and output English text only. " +
+                    "The speaker may mix in English words or switch languages mid-sentence: still translate the whole utterance into English, keeping names and technical terms as they are. " +
+                    "Ignore filler and false starts; do not invent words you did not hear."
         }
         state = "connecting"
         clearLines()
