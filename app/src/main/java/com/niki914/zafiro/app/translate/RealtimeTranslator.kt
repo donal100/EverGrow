@@ -120,6 +120,17 @@ class RealtimeTranslator(
                     else JSONArray().put("text").put("audio"))
                     .put("instructions", instructions)
                     .put("input_audio_format", "pcm16")
+                    // 服务端 VAD 的切句参数：默认切得太碎，一句话被拆成
+                    // "chicken heads" / "Among them..." 这样的碎片（15:58 实测）。
+                    // 静音 900ms 才算一句说完，阈值略降，让小声的收音也能触发。
+                    .put(
+                        "turn_detection",
+                        JSONObject()
+                            .put("type", "server_vad")
+                            .put("threshold", 0.4)
+                            .put("prefix_padding_ms", 300)
+                            .put("silence_duration_ms", 900),
+                    )
                 if (!textOnly) {
                     session.put("voice", voice).put("output_audio_format", "pcm16")
                 }
