@@ -73,6 +73,16 @@ object Translator {
     @Volatile var linesVersion: Int = 0
         private set
 
+    /**
+     * 远场提示：麦克风常常离声源很远（电视、演讲、别的房间），
+     * 声音小、有混响。明确告诉模型「这是远处传来的微弱声音，听清楚再说」，
+     * 实测同一段录音加上这句，转录更长也更合理（15:58 的碎片就是这样丢的）。
+     */
+    private const val FAR_FIELD_HINT =
+        " The audio often comes from far away — a television or a speaker across the room — " +
+            "so it may be faint and reverberant. Listen carefully, keep each sentence whole, " +
+            "and never invent words you did not hear."
+
     fun snapshotLines(): List<String> = runCatching { lines.toList() }.getOrDefault(emptyList())
 
     fun clearLines() {
@@ -198,7 +208,7 @@ object Translator {
         )
         realtime = RealtimeTranslator(
             app,
-            instructions,
+            instructions + FAR_FIELD_HINT,
             textOnly = textOnly,
             voice = voice,
             panSplit = panSplit,
