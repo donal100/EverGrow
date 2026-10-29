@@ -49,11 +49,12 @@ class TranslateSession(
         // 模型于是「听不见」就自己编字幕。内置麦克风仍用 VOICE_COMMUNICATION，
         // 因为外放时只有那条路有系统 AEC。
         val usb = AudioRouter.usbMic(ctx)
-        val source = if (usb != null) {
-            MediaRecorder.AudioSource.MIC
-        } else {
-            MediaRecorder.AudioSource.VOICE_COMMUNICATION
-        }
+        // 一律 MIC。实测（同一段环境声，手机内置麦克风）：
+        //   MIC                  rms 699  peak 4229
+        //   VOICE_COMMUNICATION  rms  77  peak  527
+        // 通话音源在「不在通话」时会被系统压得几乎没有信号 —— 字幕模式没有回放，
+        // 不需要 AEC，用它只会把自己录成静音。
+        val source = MediaRecorder.AudioSource.MIC
         val rec = runCatching {
             AudioRecord(
                 source,

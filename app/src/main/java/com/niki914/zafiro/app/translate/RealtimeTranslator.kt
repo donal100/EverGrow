@@ -227,11 +227,9 @@ class RealtimeTranslator(
         // （实测同一段环境声 rms 262，而 MIC 是 615、峰值 10965），
         // 结果就是「没听见就编字幕」。内置麦克风仍用 VOICE_COMMUNICATION 以保留 AEC。
         val usbMicDev = AudioRouter.usbMic(ctx)
-        val source = if (usbMicDev != null) {
-            MediaRecorder.AudioSource.MIC
-        } else {
-            MediaRecorder.AudioSource.VOICE_COMMUNICATION
-        }
+        // 一律 MIC：VOICE_COMMUNICATION 在不在通话时会把信号压到 rms 77（MIC 是 699），
+        // 中文识别直接变成空。回声由半双工静音处理，不依赖系统 AEC。
+        val source = MediaRecorder.AudioSource.MIC
         val rec = runCatching {
             AudioRecord(source, 16_000,
                 AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, maxOf(minBuf, 32_000))
