@@ -327,21 +327,78 @@ class RealtimeTranslator(
 
     @Volatile private var lastCaption: String = ""
 
+    // ── 双麦仲裁：同一时刻只让一个声道进入会话 ─────────────────────────
+    // 更响的那个赢，但要赢一倍（约 6dB）才切换；正在说话时锁定，
+    // 切换只发生在句子之间，免得一句话被切成两半。
+    private val chanFloor = DoubleArray(2) { 300.0 }
+    @Volatile private var liveChannel = -1
+    private var lastSwitchAt = 0L
+
+    private fun pickChannel(raw: ShortArray, n: Int, out: ShortArray): Int {
+        val frames = n / 2
+        val step = 3                       // 48k -> 16k
+        val outFrames = frames / step
+        if (outFrames <= 0) return 0
+        var p0 = 0
+        var p1 = 0
+        for (f in 0 until frames) {
+            val l = kotlin.math.abs(raw[2 * f].toInt())
+            val r = kotlin.math.abs(raw[2 * f + 1].toInt())
+            if (l > p0) p0 = l
+            if (r > p1) p1 = r
+        }
+        val e0 = p0.toDouble()
+        val e1 = p1.toDouble()
+        val now = System.currentTimeMillis()
+        // 没在用的那个声道持续学自己的底噪：两个发射器的增益和房间都不一样。
+        if (liveChannel != 1) chanFloor[0] = chanFloor[0] * 0.97 + e0 * 0.03
+        if (liveChannel != 0) chanFloor[1] = chanFloor[1] * 0.97 + e1 * 0.03
+        val a0 = e0 > kotlin.math.max(1200.0, chanFloor[0] * 1.35)
+        val a1 = e1 > kotlin.math.max(1200.0, chanFloor[1] * 1.35)
+        if (liveChannel == -1) {
+            if (a0 || a1) {
+                liveChannel = if (e0 >= e1) 0 else 1
+                lastSwitchAt = now
+                Logger.i(LOG_TAG, "arb: live=" + (liveChannel + 1) + " L=" + p0 + " R=" + p1)
+            }
+        } else if (!vadSpeaking && now - lastSwitchAt > 400) {
+            val other = 1 - liveChannel
+            val mine = if (liveChannel == 0) e0 else e1
+            val theirs = if (other == 0) e0 else e1
+            if (theirs > mine * 2.0) {
+                liveChannel = other
+                lastSwitchAt = now
+                Logger.i(LOG_TAG, "arb: switch to " + (liveChannel + 1) + " L=" + p0 + " R=" + p1)
+            }
+        }
+        val ch = if (liveChannel == 1) 1 else 0
+        for (k in 0 until outFrames) {
+            out[k] = raw[2 * (k * step) + ch]
+        }
+        return outFrames
+    }
+
     private fun startMic() {
         if (micStarted) return
         micStarted = true
-        val minBuf = AudioRecord.getMinBufferSize(
-            16_000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
         // 音源跟着设备走：USB 麦克风上 VOICE_COMMUNICATION 会被增益/降噪压掉一大半
         // （实测同一段环境声 rms 262，而 MIC 是 615、峰值 10965），
         // 结果就是「没听见就编字幕」。内置麦克风仍用 VOICE_COMMUNICATION 以保留 AEC。
         val usbMicDev = AudioRouter.usbMicWait(ctx)
+        // USB 麦克风按立体声 48k 采集：DJI 的接收器在立体声模式下把两个发射器
+        // 分别放在左右声道（实测 L 583 / R 2527，max|L-R|=12307）。
+        // 手机内置麦克风没有这个意义，仍然单声道 16k。
+        val stereoMic = usbMicDev != null
+        val capRate = if (stereoMic) 48_000 else 16_000
+        val capMask = if (stereoMic) AudioFormat.CHANNEL_IN_STEREO else AudioFormat.CHANNEL_IN_MONO
+        val capCh = if (stereoMic) 2 else 1
+        val minBuf = AudioRecord.getMinBufferSize(
+            capRate, capMask, AudioFormat.ENCODING_PCM_16BIT)
         // 一律 MIC：VOICE_COMMUNICATION 在不在通话时会把信号压到 rms 77（MIC 是 699），
         // 中文识别直接变成空。回声由半双工静音处理，不依赖系统 AEC。
         val source = MediaRecorder.AudioSource.MIC
         val rec = runCatching {
-            AudioRecord(source, 16_000,
-                AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, maxOf(minBuf, 32_000))
+            AudioRecord(source, capRate, capMask, AudioFormat.ENCODING_PCM_16BIT, maxOf(minBuf, capRate * 2))
         }.getOrNull()
         if (rec == null) { Logger.w(LOG_TAG, "mic create failed"); return }
         if (rec.state != AudioRecord.STATE_INITIALIZED) {
@@ -378,11 +435,16 @@ class RealtimeTranslator(
         }
         micThread = Thread {
             val buf = ShortArray(1600)
+            // 立体声时一次读 4800 帧（9600 short），仲裁后降采样成 1600 个 16k 样本。
+            val raw = if (stereoMic) ShortArray(9600) else null
             // 只认自己那个录音器：换麦克风时旧线程必须自己退出，否则读已释放的对象。
             while (running && record === rec) {
-                val n = runCatching { rec.read(buf, 0, buf.size) }.getOrDefault(-1)
-                if (n <= 0) continue
+                val src = raw ?: buf
+                val read = runCatching { rec.read(src, 0, src.size) }.getOrDefault(-1)
+                if (read <= 0) continue
                 if (muted) continue
+                val n = if (raw != null) pickChannel(raw, read, buf) else read
+                if (n <= 0) continue
                 // 播报期间不送音频：否则模型会听见自己刚说的译文，再「翻译」一遍。
                 if (halfDuplex && !textOnly && speaking) continue
                 // 上行增益：这一路实测上行 rms 只有 136（峰值 10223），
