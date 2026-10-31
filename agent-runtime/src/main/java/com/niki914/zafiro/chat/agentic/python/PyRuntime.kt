@@ -134,7 +134,7 @@ object PyRuntime {
             if (binder != null) {
                 runCatching { binder.linkToDeath(deathRecipient, 0) }
                     .onFailure { e ->
-                        runCatching { Logger.w(TAG, "linkToDeath failed: " + e.javaClass.simpleName + " " + e.message) }
+                        runCatching { Logger.w(LOG_TAG, "linkToDeath failed: " + e.javaClass.simpleName + " " + e.message) }
                     }
             }
             pendingBinder.complete(binder)
