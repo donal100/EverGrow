@@ -53,8 +53,6 @@ object Translator {
     @Volatile private var realtime: RealtimeTranslator? = null
     /** 简化字幕引擎（固定 3 秒切片 + omni），单向模式用。 */
     @Volatile private var chunk: ChunkCaptionEngine? = null
-    /** 双人字幕：一次请求送两路音频，模型分别标注 A / B。 */
-    @Volatile private var duo: ChunkDuoEngine? = null
     @Volatile private var cantoneseSpeaker: CantoneseSpeaker? = null
 
     /** 每次 startRealtime 递增；旧的 socket 回调据此丢弃，避免覆盖新会话状态。 */
@@ -87,13 +85,18 @@ object Translator {
             "so it may be faint and reverberant. Listen carefully, keep each sentence whole, " +
             "and never invent words you did not hear."
 
-    /** translate_engine=chunk 时走切片引擎；默认仍是 realtime。 */
+    /**
+     * 引擎选择：默认 **chunk-duo** —— 双人模式一次请求送两路音频。
+     * 实测 omni 能分别听 A / B，两个人同时说话也能各自出字幕，而且没有
+     * 服务端 VAD、手动 commit、半双工那一串可以在任何一处出错的环节。
+     * 单向字幕仍是 realtime，除非显式写 translate_engine=chunk。
+     */
     private fun engineMode(): String = runCatching {
-        val app = appCtx ?: return@runCatching "realtime"
+        val app = appCtx ?: return@runCatching "chunk-duo"
         File(app.filesDir, "voice_tuning.txt").readLines()
             .firstOrNull { it.trim().startsWith("translate_engine=") }
-            ?.substringAfter("=")?.trim()?.lowercase() ?: "realtime"
-    }.getOrDefault("realtime")
+            ?.substringAfter("=")?.trim()?.lowercase() ?: "chunk-duo"
+    }.getOrDefault("chunk-duo")
 
     fun snapshotLines(): List<String> = runCatching { lines.toList() }.getOrDefault(emptyList())
 
@@ -126,7 +129,7 @@ object Translator {
         }
     }
 
-    val isRunning: Boolean get() = session != null || realtime != null || chunk != null || duo != null
+    val isRunning: Boolean get() = session != null || realtime != null || chunk != null
     val mode: String get() = direction
     val audioRoute: String get() = routing
 
@@ -157,7 +160,7 @@ object Translator {
      * 目标语言锁定（en / zh），输出走耳机。
      */
     fun startRealtime(ctx: Context, mode: String) {
-        if (realtime != null || chunk != null || duo != null) return
+        if (realtime != null || chunk != null) return
         val app = ctx.applicationContext
         appCtx = app
         direction = mode
@@ -222,33 +225,6 @@ object Translator {
         // 单向字幕走简化引擎：固定 3 秒切片直接问 omni。
         // 实时会话那套要做服务端 VAD、手动 commit、半双工、双麦仲裁，
         // 任何一处错都表现成「听不见」；这里没有那些层次。
-        // 双人字幕：两路音频一起送，模型给出 A / B 各自的译文。
-        // 路由是确定的：A 的话进 B 的耳朵（右），B 的话进 A 的耳朵（左）。
-        if (twoWay && engineMode() == "chunk-duo") {
-            val g = gen
-            duo = ChunkDuoEngine(
-                app,
-                "Translate what each person says into the other person's language: "
-                    + "A speaks Cantonese, B speaks English. Output English for A's lines and "
-                    + "Cantonese (written Chinese) for B's lines.",
-                onLine = { line ->
-                    if (g == generation) {
-                        lastTranslated = line
-                        pushLine(line)
-                        Logger.i(LOG_TAG, "duo: " + line.take(80))
-                    }
-                },
-                onState = { st ->
-                    if (g == generation) {
-                        state = st
-                        Logger.i(LOG_TAG, "state=" + st)
-                    }
-                },
-            ).also { it.start() }
-            Logger.i(LOG_TAG, "engine=chunk-duo")
-            return
-        }
-
         if (!twoWay && engineMode() == "chunk") {
             val g = gen
             chunk = ChunkCaptionEngine(
@@ -344,8 +320,6 @@ object Translator {
         realtime = null
         chunk?.stop()
         chunk = null
-        duo?.stop()
-        duo = null
         appCtx?.let { AudioRouter.reset(it) }
         routing = "speaker"
         state = "idle"
