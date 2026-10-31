@@ -167,6 +167,10 @@ class ChunkDuoEngine(
 
             $instructions
 
+            Never repeat what a speaker said in their own language: A's line must be the
+            English translation, B's line must be the Chinese translation. If a stream is
+            already in the other language, still translate it into the target language.
+
             Reply with exactly two lines:
             A: <translation, or (skip) if this stream has no speech, is noise, or is not worth relaying>
             B: <same rule>
@@ -206,6 +210,15 @@ class ChunkDuoEngine(
             val text = t.substring(2).trim()
             if (text.isEmpty() || text.startsWith("(skip", true)) continue
             val who = if (isA) "A" else "B"
+            // A 说粤语、B 说英语，所以「译文」一定要换语言：
+            // A 的行必须是英文，B 的行必须是中文。没换语言就说明模型把原话抄回来了，
+            // 念出来就成了「对着说英语的人又念一遍英语」。
+            val han = text.any { it.code in 0x3400..0x4DBF || it.code in 0x4E00..0x9FFF }
+            val isTranslation = if (who == "A") !han else han
+            if (!isTranslation) {
+                Logger.i(TAG, "duo skip same-language " + who + ": " + text.take(40))
+                continue
+            }
             if (text == lastLine[who]) {
                 Logger.i(TAG, "duo skip repeat " + who + ": " + text.take(40))
                 continue
