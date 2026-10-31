@@ -284,17 +284,20 @@ class RealtimeTranslator(
 
     /** 提交当前缓冲并要一句回答。失败只记日志，不抛。 */
     private fun commitTurn(reason: String) {
-        if (samplesSinceCommit < 4_800L) {   // <0.3s 不值得提交
+        if (samplesSinceCommit < 24_000L) {   // <1.5s 不值得提交
             return
         }
         // 静音不提交：实测每 4 秒送 1 秒静音，模型照样回一大段语音，
         // 半双工随即把麦克风静音，形成「越听越聋」的循环。
         val rms = if (sumCount > 0) Math.sqrt(sumSq.toDouble() / sumCount) else 0.0
-        if (rms < 800.0) {
+        if (rms < 1200.0) {
+            // 门槛从 800 提到 1200：实测 700-900 的房间底噪一样能让模型编出
+            // 「I.」「哈喽。」这样的字幕。跳过时把计时也推后，避免每秒重试一次。
             Logger.i(LOG_TAG, "commit skipped (quiet) rms=" + rms.toInt() + " samples=" + samplesSinceCommit)
             samplesSinceCommit = 0
             sumSq = 0
             sumCount = 0
+            lastCommitAt = System.currentTimeMillis()
             return
         }
         val s = socket ?: return
