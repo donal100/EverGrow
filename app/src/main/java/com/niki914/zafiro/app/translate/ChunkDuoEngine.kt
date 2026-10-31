@@ -39,7 +39,12 @@ class ChunkDuoEngine(
     private companion object {
         const val TAG = "niki914_zafiro_ChunkDuo"
         const val RATE_OUT = 16_000
-        const val CHUNK_MS = 3_000
+        /** 最短一段：太短没意义。 */
+        const val MIN_CHUNK_MS = 1_200
+        /** 最长一段：一直说不停也要切，否则延迟无限增长。 */
+        const val MAX_CHUNK_MS = 6_000
+        /** 安静这么久就算一句说完（两侧都安静）。 */
+        const val SILENCE_MS = 1_200
         const val MIN_RMS = 700.0
         const val CONTEXT_LINES = 6
         const val ENDPOINT = "https://maas.qwencloudapi.com/compatible-mode/v1/chat/completions"
@@ -89,27 +94,42 @@ class ChunkDuoEngine(
         runCatching { rec.startRecording() }
         onState("ready")
 
-        val target = rate / 1000 * CHUNK_MS      // frames per chunk
-        val left = ShortArray(target)
-        val right = ShortArray(target)
+        // 按静音切句：固定 3 秒会把「一只黑猫在……」这样的半句切掉。
+        val maxFrames = rate / 1000 * MAX_CHUNK_MS
+        val minFrames = rate / 1000 * MIN_CHUNK_MS
+        val silenceFramesNeeded = rate / 1000 * SILENCE_MS
+        val left = ShortArray(maxFrames)
+        val right = ShortArray(maxFrames)
         var fill = 0
+        var silent = 0
         val buf = ShortArray(9600)               // 100 ms stereo
 
         while (running) {
             val n = runCatching { rec.read(buf, 0, buf.size) }.getOrDefault(-1)
             if (n <= 0) continue
             val frames = n / 2
+            var peak = 0
             for (f in 0 until frames) {
-                if (fill < target) {
+                val lv = kotlin.math.abs(buf[2 * f].toInt())
+                val rv = kotlin.math.abs(buf[2 * f + 1].toInt())
+                if (lv > peak) peak = lv
+                if (rv > peak) peak = rv
+                if (fill < maxFrames) {
                     left[fill] = buf[2 * f]
                     right[fill] = buf[2 * f + 1]
                     fill++
                 }
             }
-            if (fill >= target) {
-                val l = left.copyOf(target)
-                val r = right.copyOf(target)
+            // 两侧都安静才算静音：一个人在说，另一个人那边自然是安静的。
+            if (peak < 900) silent += frames else silent = 0
+            val done = (fill >= minFrames && silent >= silenceFramesNeeded) || fill >= maxFrames
+            if (done) {
+                val n0 = fill
+                val l = left.copyOf(n0)
+                val r = right.copyOf(n0)
                 fill = 0
+                silent = 0
+                Logger.i(TAG, "chunk frames=" + n0 + " (" + (n0 * 1000 / rate) + "ms)")
                 io.execute { ask(l, r) }
             }
         }
