@@ -51,6 +51,8 @@ object Translator {
     @Volatile private var speaker: VoiceReplySpeaker? = null
     @Volatile private var busy = false
     @Volatile private var realtime: RealtimeTranslator? = null
+    /** 简化字幕引擎（固定 3 秒切片 + omni），单向模式用。 */
+    @Volatile private var chunk: ChunkCaptionEngine? = null
     @Volatile private var cantoneseSpeaker: CantoneseSpeaker? = null
 
     /** 每次 startRealtime 递增；旧的 socket 回调据此丢弃，避免覆盖新会话状态。 */
@@ -83,6 +85,14 @@ object Translator {
             "so it may be faint and reverberant. Listen carefully, keep each sentence whole, " +
             "and never invent words you did not hear."
 
+    /** translate_engine=chunk 时走切片引擎；默认仍是 realtime。 */
+    private fun engineMode(): String = runCatching {
+        val app = appCtx ?: return@runCatching "realtime"
+        File(app.filesDir, "voice_tuning.txt").readLines()
+            .firstOrNull { it.trim().startsWith("translate_engine=") }
+            ?.substringAfter("=")?.trim()?.lowercase() ?: "realtime"
+    }.getOrDefault("realtime")
+
     fun snapshotLines(): List<String> = runCatching { lines.toList() }.getOrDefault(emptyList())
 
     fun clearLines() {
@@ -114,7 +124,7 @@ object Translator {
         }
     }
 
-    val isRunning: Boolean get() = session != null || realtime != null
+    val isRunning: Boolean get() = session != null || realtime != null || chunk != null
     val mode: String get() = direction
     val audioRoute: String get() = routing
 
@@ -145,7 +155,7 @@ object Translator {
      * 目标语言锁定（en / zh），输出走耳机。
      */
     fun startRealtime(ctx: Context, mode: String) {
-        if (realtime != null) return
+        if (realtime != null || chunk != null) return
         val app = ctx.applicationContext
         appCtx = app
         direction = mode
@@ -207,6 +217,32 @@ object Translator {
                 " earType=" + (earphones?.type ?: -1) + " earName=" + (earphones?.productName ?: "none") +
                 " panCfg=" + panCfg,
         )
+        // 单向字幕走简化引擎：固定 3 秒切片直接问 omni。
+        // 实时会话那套要做服务端 VAD、手动 commit、半双工、双麦仲裁，
+        // 任何一处错都表现成「听不见」；这里没有那些层次。
+        if (!twoWay && engineMode() == "chunk") {
+            val g = gen
+            chunk = ChunkCaptionEngine(
+                app,
+                instructions,
+                onTranscript = { text ->
+                    if (g == generation) {
+                        lastTranslated = text
+                        pushLine(text)
+                        Logger.i(LOG_TAG, "translated: " + text.take(80))
+                    }
+                },
+                onState = { s ->
+                    if (g == generation) {
+                        state = s
+                        Logger.i(LOG_TAG, "state=" + s)
+                    }
+                },
+            ).also { it.start() }
+            Logger.i(LOG_TAG, "engine=chunk")
+            return
+        }
+
         realtime = RealtimeTranslator(
             app,
             instructions + FAR_FIELD_HINT,
@@ -277,6 +313,8 @@ object Translator {
         generation++          // 让旧 socket 迟到的回调写不进来
         realtime?.stop()
         realtime = null
+        chunk?.stop()
+        chunk = null
         appCtx?.let { AudioRouter.reset(it) }
         routing = "speaker"
         state = "idle"
