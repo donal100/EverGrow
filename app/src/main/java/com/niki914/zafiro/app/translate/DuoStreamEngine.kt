@@ -78,9 +78,14 @@ class DuoStreamEngine(
     }
     /** 每个说话人上一次上屏的译文：切片边界常把同一句送来两次。 */
     private val lastLine = arrayOfNulls<String>(2)
-    private val speakers = arrayOfNulls<MediaPlayer>(2)
-    private val tts = arrayOfNulls<Thread>(2)
-    private val io = Executors.newSingleThreadExecutor { r -> Thread(r, "duo-stream-io") }
+    /**
+     * 每一侧一条播报队列：第二个句子排在第一句后面，绝不打断。
+     * 两条线程各管一侧，所以两个人可以同时出声而互不踩踏。
+     */
+    private val queue = arrayOf(ArrayDeque<String>(), ArrayDeque<String>())
+    private val speaking = BooleanArray(2)
+    private val lock = Any()
+    private val io = Executors.newFixedThreadPool(2) { r -> Thread(r, "duo-stream-speak") }
     private val http = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
@@ -147,8 +152,7 @@ class DuoStreamEngine(
         record = null
         sessions.forEach { runCatching { it?.stop() } }
         sessions.fill(null)
-        speakers.forEach { runCatching { it?.release() } }
-        speakers.fill(null)
+        queue.forEach { q -> synchronized(q) { q.clear() } }
         runCatching { io.shutdownNow() }
         runCatching { resolveIo.shutdownNow() }
         onState("stopped")
@@ -234,7 +238,7 @@ class DuoStreamEngine(
         lastLine[side] = line
         note(side, "ok", line)
         onLine((if (side == A) "A" else "B") + "：" + line)
-        if (speechOn) io.execute { runCatching { say(side, line) } }
+        if (speechOn) enqueue(side, line)
     }
 
     private fun accept(side: Int, raw: String) {
@@ -414,7 +418,33 @@ class DuoStreamEngine(
         dumpFile = null
     }
 
+    /** 排到这一侧的队尾。一个人连说两句时，第二句等第一句播完再响。 */
+    private fun enqueue(side: Int, text: String) {
+        val q = queue[side]
+        synchronized(q) { q.addLast(text) }
+        io.execute { drain(side) }
+    }
+
+    private fun drain(side: Int) {
+        synchronized(lock) {
+            if (speaking[side]) {
+                Logger.i(TAG, "say " + (if (side == A) "A" else "B") + " queued behind current")
+                return
+            }
+            speaking[side] = true
+        }
+        try {
+            while (running) {
+                val next = synchronized(queue[side]) { queue[side].removeFirstOrNull() } ?: break
+                runCatching { say(side, next) }
+            }
+        } finally {
+            synchronized(lock) { speaking[side] = false }
+        }
+    }
+
     /** 合成一句，播到对面那只耳朵：A 的话进右耳，B 的话进左耳。 */
+
     private fun say(side: Int, text: String) {
         val key = runCatching { File(ctx.filesDir, "qwen_asr_key.txt").readText().trim() }.getOrNull().orEmpty()
         if (key.isEmpty()) return
@@ -459,11 +489,15 @@ class DuoStreamEngine(
                 if (toRight) setVolume(BLEED, 1f) else setVolume(1f, BLEED)
             }
         }.getOrNull() ?: return
-        // 每一侧一个播放器：两个人同时说话时互不打断。
-        runCatching { speakers[side]?.release() }
-        speakers[side] = mp
         runCatching { mp.start() }
         Logger.i(TAG, "say " + (if (toRight) "right" else "left") + " voice=" + voice + " " + text.take(30))
+        // 播完为止：以前 start 完就返回，下一句立刻把上一句 release 掉，
+        // 听感就是「第二句把第一句掐断」。
+        val t0 = System.currentTimeMillis()
+        while (mp.isPlaying && running && System.currentTimeMillis() - t0 < 30_000L) {
+            runCatching { Thread.sleep(40) }
+        }
+        runCatching { mp.release() }
         runCatching { f.delete() }
     }
 }
