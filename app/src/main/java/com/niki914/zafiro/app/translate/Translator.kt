@@ -231,11 +231,15 @@ object Translator {
         // 路由是确定的：A 的话进 B 的耳朵，B 的话进 A 的耳朵。
         if (twoWay && engineMode() == "chunk-duo") {
             val g = gen
+            // 语言跟着菜单走：two-way 是普通话↔英文，two-way-yue 才是粤语↔英文。
+            val duoChinese = if (mode == "two-way-yue") "Cantonese" else "Mandarin"
             duo = ChunkDuoEngine(
                 app,
                 "Translate what each person says into the other person's language: "
-                    + "A speaks Cantonese, B speaks English. Output English for A's lines "
-                    + "and Cantonese (written Chinese) for B's lines.",
+                    + "A speaks " + duoChinese + ", B speaks English. Output English for A's lines "
+                    + "and " + duoChinese + " (written Chinese" +
+                    (if (mode == "two-way-yue") ", as used in Hong Kong" else "") + ") for B's lines.",
+                chineseVoice = if (mode == "two-way-yue") "Rocky" else "Serena",
                 onLine = { line ->
                     if (g == generation) {
                         lastTranslated = line
