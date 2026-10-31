@@ -60,8 +60,22 @@ class DuoStreamEngine(
     private var record: AudioRecord? = null
     private var thread: Thread? = null
     private val sessions = arrayOfNulls<RealtimeTranslator>(2)
-    /** 每条会话最近一次「听见的语言」判定：true = 听见的正是它该听的那种语言。 */
-    private val verdicts = arrayOf(ArrayDeque<Boolean>(), ArrayDeque<Boolean>())
+    /**
+     * 一个回合的两半：模型听见的原话（据此判断是不是隔壁那个人漏进来的），
+     * 和模型给出的译文。两半到齐才可以决定播不播 —— 先播后判就是「把自己说的话
+     * 原样念回去」的来源（实测第一条就这样被念出来了）。
+     */
+    private val heardText = arrayOfNulls<String>(2)
+    private val heardOk = arrayOfNulls<Boolean>(2)
+    private var heardAt = LongArray(2)
+    /** 这一路到底有没有输入转写：网关不认这个字段时只能退回只靠输出语言判断。 */
+    private var heardEvents = IntArray(2)
+    private val transcriptionOk = booleanArrayOf(true, true)
+    private val lineText = arrayOfNulls<String>(2)
+    private var lineAt = LongArray(2)
+    private val resolveIo = java.util.concurrent.Executors.newSingleThreadScheduledExecutor { r ->
+        Thread(r, "duo-stream-resolve")
+    }
     /** 每个说话人上一次上屏的译文：切片边界常把同一句送来两次。 */
     private val lastLine = arrayOfNulls<String>(2)
     private val speakers = arrayOfNulls<MediaPlayer>(2)
@@ -136,6 +150,7 @@ class DuoStreamEngine(
         speakers.forEach { runCatching { it?.release() } }
         speakers.fill(null)
         runCatching { io.shutdownNow() }
+        runCatching { resolveIo.shutdownNow() }
         onState("stopped")
     }
 
@@ -155,6 +170,8 @@ class DuoStreamEngine(
             "If the audio contains any other language, a second voice, background speech from " +
             "someone else, a television, music, noise, echo or speech you cannot make out, " +
             "reply with exactly (skip) and nothing else. " +
+            "If what you hear is already in $target, reply exactly (skip) — never hand it back " +
+            "unchanged. " +
             "Never guess words you did not hear."
     }
 
@@ -162,19 +179,62 @@ class DuoStreamEngine(
     private fun verdict(side: Int, heard: String) {
         val hasHan = heard.any { it.code in 0x3400..0x4DBF || it.code in 0x4E00..0x9FFF }
         val expected = if (side == A) hasHan else !hasHan
-        val q = verdicts[side]
-        synchronized(q) {
-            q.addLast(expected)
-            while (q.size > 4) q.removeFirst()
-        }
+        heardText[side] = heard
+        heardOk[side] = expected
+        heardAt[side] = System.currentTimeMillis()
+        heardEvents[side]++
+        transcriptionOk[side] = true
         Logger.i(TAG, (if (side == A) "A" else "B") + " heard=" + (if (hasHan) "zh" else "en") +
             " ok=" + expected + " " + heard.take(50))
+        resolve(side)
     }
 
-    /** 取走最早的一条判定；没有转写就不拦（宁可多一句，别整段哑掉）。 */
-    private fun takeVerdict(side: Int): Boolean? {
-        val q = verdicts[side]
-        return synchronized(q) { q.removeFirstOrNull() }
+    /** 归一化：只留字母/数字/汉字，用来判断「是不是原话复读」。 */
+    private fun norm(s: String): String =
+        s.lowercase().filter { it.isLetterOrDigit() }
+
+    /** EP 的两半到齐（或超时）才决定：这就是「先播后判」的修正。 */
+    private fun resolve(side: Int) {
+        val line = lineText[side] ?: return
+        val now = System.currentTimeMillis()
+        val seen = transcriptionOk[side] && heardEvents[side] > 0
+        val fresh = now - heardAt[side] < 2_500L
+        if (seen && !fresh) {
+            // 转写还没到。超过 1.5 秒就不再等：宁可不播，也不把原话念回去。
+            if (now - lineAt[side] < 1_500L) return
+            lineText[side] = null
+            Logger.i(TAG, (if (side == A) "A" else "B") + " skip unverified " + line.take(40))
+            note(side, "skip-unverified", line)
+            return
+        }
+        lineText[side] = null
+        val heard = heardText[side]
+        if (seen && heardOk[side] == false) {
+            Logger.i(TAG, (if (side == A) "A" else "B") + " skip crosstalk " + line.take(40))
+            note(side, "skip-crosstalk", line)
+            return
+        }
+        // 复读：译文和它听见的原话几乎一样，说明它没翻译，只是跟着念。
+        if (heard != null) {
+            val a = norm(heard)
+            val b = norm(line)
+            if (a.isNotEmpty() && b.isNotEmpty() &&
+                (a == b || (b.length >= a.length * 3 / 4 && b.contains(a)))
+            ) {
+                Logger.i(TAG, (if (side == A) "A" else "B") + " skip echo " + line.take(40))
+                note(side, "skip-echo", line)
+                return
+            }
+        }
+        if (line == lastLine[side]) {
+            Logger.i(TAG, (if (side == A) "A" else "B") + " skip repeat " + line.take(40))
+            note(side, "skip-repeat", line)
+            return
+        }
+        lastLine[side] = line
+        note(side, "ok", line)
+        onLine((if (side == A) "A" else "B") + "：" + line)
+        if (speechOn) io.execute { runCatching { say(side, line) } }
     }
 
     private fun accept(side: Int, raw: String) {
@@ -185,22 +245,16 @@ class DuoStreamEngine(
         val hasHan = text.any { it.code in 0x3400..0x4DBF || it.code in 0x4E00..0x9FFF }
         // 输出语言：A 那边只该出英文，B 那边只该出中文。别的都说明它在复读原文。
         if (side == A && hasHan) {
-            Logger.i(TAG, "$who skip wrong-output " + text.take(40)); note(side, "skip-wrong-output", text); return
+            Logger.i(TAG, who + " skip wrong-output " + text.take(40)); note(side, "skip-wrong-output", text); return
         }
         if (side == B && !hasHan) {
             Logger.i(TAG, "$who skip wrong-output " + text.take(40)); note(side, "skip-wrong-output", text); return
         }
-        // 输入语言：听见的不是该听的语言 = 隔壁那个人的声音漏进来了。
-        if (takeVerdict(side) == false) {
-            Logger.i(TAG, "$who skip crosstalk " + text.take(40)); note(side, "skip-crosstalk", text); return
-        }
-        if (text == lastLine[side]) {
-            Logger.i(TAG, "$who skip repeat " + text.take(40)); note(side, "skip-repeat", text); return
-        }
-        lastLine[side] = text
-        note(side, "ok", text)
-        onLine("$who：$text")
-        if (speechOn) io.execute { runCatching { say(side, text) } }
+        lineText[side] = text
+        lineAt[side] = System.currentTimeMillis()
+        // 先配对再播：转写可能比译文晚到几百毫秒，等它一下。
+        resolveIo.schedule({ runCatching { resolve(side) } }, 1_500, java.util.concurrent.TimeUnit.MILLISECONDS)
+        resolve(side)
     }
 
     private fun loop() {
