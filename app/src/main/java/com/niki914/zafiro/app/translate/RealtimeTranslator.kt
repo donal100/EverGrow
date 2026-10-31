@@ -221,6 +221,9 @@ class RealtimeTranslator(
 
     /** 麦克风：手机自带麦克风，16kHz 单声道，100ms 一片直接推上去。 */
     @Volatile private var micStarted = false
+
+    /** 当前录音器是不是 USB 麦克风：它不跟着通话路由走，所以不每回合重建。 */
+    @Volatile private var usbMicActive = false
     /** 是不是在用耳机麦克风 —— 是的话播放前后要像听写模式那样在 SCO 和 A2DP 之间来回切。 */
     @Volatile private var earbudMicActive = false
     /** 当前想用哪个麦克风：true = 耳机，false = 手机（播报窗口里用手机）。 */
@@ -389,6 +392,7 @@ class RealtimeTranslator(
         // 分别放在左右声道（实测 L 583 / R 2527，max|L-R|=12307）。
         // 手机内置麦克风没有这个意义，仍然单声道 16k。
         val stereoMic = usbMicDev != null
+        usbMicActive = usbMicDev != null
         val capRate = if (stereoMic) 48_000 else 16_000
         val capMask = if (stereoMic) AudioFormat.CHANNEL_IN_STEREO else AudioFormat.CHANNEL_IN_MONO
         val capCh = if (stereoMic) 2 else 1
@@ -606,6 +610,13 @@ class RealtimeTranslator(
     /** 丢掉旧录音器，按同一套规则再建一个（耳机麦克风优先）。 */
     @Synchronized
     private fun restartMic() {
+        // USB 麦克风与通话路由无关：它不是耳机麦克风、也不需要 SCO，
+        // 每回合重建只会把正在说的话切碎 —— 2026-10-31 实测 3 分钟重建 31 次，
+        // 每段只有 0.0–1.4 秒，服务端收到的永远是碎片（heard: 为空）。
+        if (usbMicActive && record != null) {
+            Logger.i(LOG_TAG, "route: keep usb mic (no restart)")
+            return
+        }
         runCatching { record?.stop() }
         runCatching { record?.release() }
         record = null
