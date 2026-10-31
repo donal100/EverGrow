@@ -55,6 +55,8 @@ object Translator {
     @Volatile private var chunk: ChunkCaptionEngine? = null
     /** 双人字幕：一次请求送两路音频，模型分别标注 A / B。 */
     @Volatile private var duo: ChunkDuoEngine? = null
+    /** 双人实时：一个声道一条 realtime 会话（默认）。 */
+    @Volatile private var duoStream: DuoStreamEngine? = null
     @Volatile private var cantoneseSpeaker: CantoneseSpeaker? = null
 
     /** 每次 startRealtime 递增；旧的 socket 回调据此丢弃，避免覆盖新会话状态。 */
@@ -88,17 +90,22 @@ object Translator {
             "and never invent words you did not hear."
 
     /**
-     * 引擎选择：默认 **chunk-duo** —— 双人模式一次请求送两路音频。
+     * 引擎选择：默认 **duo-stream** —— 一个声道一条 realtime 会话。
+     * 谁在说话不进模型：左右声道就是两个人，所以每条会话永远只听到一个人。
+     * 延迟约 1 秒（没有静音窗口，也没有整段请求）。
+     * 写成 translate_engine=chunk-duo 才回到「一次请求送两路音频」的切片引擎。
+     *
+     * 旧说明保留：chunk-duo —— 双人模式一次请求送两路音频。
      * 实测 omni 能分别听 A / B，两个人同时说话也能各自出字幕，而且没有
      * 服务端 VAD、手动 commit、半双工那一串可以在任何一处出错的环节。
      * 单向字幕仍是 realtime，除非显式写 translate_engine=chunk。
      */
     private fun engineMode(): String = runCatching {
-        val app = appCtx ?: return@runCatching "chunk-duo"
+        val app = appCtx ?: return@runCatching "duo-stream"
         File(app.filesDir, "voice_tuning.txt").readLines()
             .firstOrNull { it.trim().startsWith("translate_engine=") }
-            ?.substringAfter("=")?.trim()?.lowercase() ?: "chunk-duo"
-    }.getOrDefault("chunk-duo")
+            ?.substringAfter("=")?.trim()?.lowercase() ?: "duo-stream"
+    }.getOrDefault("duo-stream")
 
     fun snapshotLines(): List<String> = runCatching { lines.toList() }.getOrDefault(emptyList())
 
@@ -131,7 +138,8 @@ object Translator {
         }
     }
 
-    val isRunning: Boolean get() = session != null || realtime != null || chunk != null || duo != null
+    val isRunning: Boolean
+        get() = session != null || realtime != null || chunk != null || duo != null || duoStream != null
     val mode: String get() = direction
     val audioRoute: String get() = routing
 
@@ -162,7 +170,7 @@ object Translator {
      * 目标语言锁定（en / zh），输出走耳机。
      */
     fun startRealtime(ctx: Context, mode: String) {
-        if (realtime != null || chunk != null || duo != null) return
+        if (realtime != null || chunk != null || duo != null || duoStream != null) return
         val app = ctx.applicationContext
         appCtx = app
         direction = mode
@@ -229,6 +237,32 @@ object Translator {
         // 任何一处错都表现成「听不见」；这里没有那些层次。
         // 双人字幕：两路音频一起送，模型分别给 A / B 的译文。
         // 路由是确定的：A 的话进 B 的耳朵，B 的话进 A 的耳朵。
+        // 双人实时：两路音频各自一条会话。谁在说话由「哪条声道」决定，
+        // 每条会话锁死一种源语言，听见别的就 skip —— 串音在源头就被挡住。
+        if (twoWay && engineMode() == "duo-stream") {
+            val g = gen
+            duoStream = DuoStreamEngine(
+                app,
+                chinese = if (mode == "two-way-yue") "Cantonese" else "Mandarin",
+                chineseVoice = if (mode == "two-way-yue") "Rocky" else "Serena",
+                onLine = { line ->
+                    if (g == generation) {
+                        lastTranslated = line
+                        pushLine(line)
+                        Logger.i(LOG_TAG, "duo-stream: " + line.take(80))
+                    }
+                },
+                onState = { st ->
+                    if (g == generation) {
+                        state = st
+                        Logger.i(LOG_TAG, "state=" + st)
+                    }
+                },
+            ).also { it.start() }
+            Logger.i(LOG_TAG, "engine=duo-stream")
+            return
+        }
+
         if (twoWay && engineMode() == "chunk-duo") {
             val g = gen
             // 语言跟着菜单走：two-way 是普通话↔英文，two-way-yue 才是粤语↔英文。
@@ -355,6 +389,8 @@ object Translator {
         chunk = null
         duo?.stop()
         duo = null
+        duoStream?.stop()
+        duoStream = null
         appCtx?.let { AudioRouter.reset(it) }
         routing = "speaker"
         state = "idle"

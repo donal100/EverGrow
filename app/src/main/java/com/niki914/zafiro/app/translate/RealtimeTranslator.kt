@@ -51,6 +51,11 @@ class RealtimeTranslator(
     private val bleed: Float = 0.12f,
     /** 外放时为 true：模型说话期间不再上传麦克风，否则它会听见自己并自问自答。 */
     private val halfDuplex: Boolean,
+    /**
+     * 外部喂音频：双人模式里每一路各开一条会话，音频由 DuoStreamEngine 采集、
+     * 按声道拆开再推进来（pushPcm）。此时不要自己开麦克风。
+     */
+    private val externalAudio: Boolean = false,
     private val onTranscript: (String) -> Unit,
     /** 模型听见的原话。字幕流里要有这一行，屏幕才看得出「谁说了什么」。 */
     private val onHeard: (String) -> Unit = {},
@@ -64,6 +69,10 @@ class RealtimeTranslator(
 
     @Volatile private var socket: WebSocket? = null
     @Volatile private var running = false
+    /** 收到 session.updated 之后才算能送音频：提前送会被服务端拒掉。 */
+    @Volatile private var ready = false
+    /** 双人模式要开输入转写：串音检测唯一靠得住的是「这一路听见了哪种语言」。 */
+    @Volatile private var withTranscription = externalAudio
     /** 服务器正在返回译文：外放模式下这期间不送麦克风音频。 */
     @Volatile private var speaking = false
     /** 本地播报期间把麦克风掐掉，别把自己念的声音再送上去（粤语走本地合成时会用到）。 */
@@ -115,6 +124,28 @@ class RealtimeTranslator(
             .build()
         socket = client.newWebSocket(req, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
+                webSocket.send(sessionPayload().toString())
+                onState("connected")
+            }
+
+            override fun onMessage(webSocket: WebSocket, text: String) {
+                runCatching { handleEvent(text) }
+            }
+
+            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                onState("socket failed: " + (t.message ?: t.javaClass.simpleName))
+                running = false
+            }
+
+            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                onState("closed " + code)
+                running = false
+            }
+        })
+    }
+
+    /** session.update 的内容。抽出来是因为网关拒绝某个字段时要能去掉它重发一次。 */
+    private fun sessionPayload(): JSONObject {
                 val session = JSONObject()
                     .put("modalities", if (textOnly) JSONArray().put("text")
                     else JSONArray().put("text").put("audio"))
@@ -139,32 +170,42 @@ class RealtimeTranslator(
                 if (!textOnly) {
                     session.put("voice", voice).put("output_audio_format", "pcm16")
                 }
-                webSocket.send(JSONObject().put("type", "session.update").put("session", session).toString())
-                onState("connected")
-            }
-
-            override fun onMessage(webSocket: WebSocket, text: String) {
-                runCatching { handleEvent(text) }
-            }
-
-            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                onState("socket failed: " + (t.message ?: t.javaClass.simpleName))
-                running = false
-            }
-
-            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                onState("closed " + code)
-                running = false
-            }
-        })
+                if (withTranscription) {
+                    // 「这一路到底听见了哪种语言」只能由转写给出：这是双人模式判断
+                    // 串音的唯一依据（输出语言对、但源语言不对 = 隔壁那个人漏进来了）。
+                    session.put("input_audio_transcription", JSONObject().put("model", "qwen3-asr-flash"))
+                }
+                return JSONObject().put("type", "session.update").put("session", session)
     }
+
+    /** 由 DuoStreamEngine 推进来的一路 16k 单声道 PCM。 */
+    fun pushPcm(pcm: ShortArray) {
+        if (!externalAudio || !running || !ready || pcm.isEmpty()) return
+        val gain = uplinkGain
+        val bytes = ByteArray(pcm.size * 2)
+        var p = 0
+        for (i in pcm.indices) {
+            val v = if (gain > 1.0) (pcm[i] * gain).toInt().coerceIn(-32768, 32767) else pcm[i].toInt()
+            bytes[p++] = (v and 0xFF).toByte()
+            bytes[p++] = ((v shr 8) and 0xFF).toByte()
+        }
+        socket?.send(
+            JSONObject().put("type", "input_audio_buffer.append")
+                .put("audio", Base64.encodeToString(bytes, Base64.NO_WRAP)).toString(),
+        )
+    }
+
+    /** 外部模式下这是唯一的开关：会话没 ready 之前推进来的音频一律丢掉。 */
+    val isReady: Boolean get() = ready && running
 
     private fun handleEvent(text: String) {
         val ev = JSONObject(text)
         when (ev.optString("type")) {
             "session.updated" -> {
+                ready = true
                 onState("ready")
-                startMic()
+                if (!externalAudio) startMic()
+                Logger.i(LOG_TAG, "session ready external=" + externalAudio + " transcribe=" + withTranscription)
             }
             "response.created" -> {
                 speaking = true; responseDone = false
@@ -212,7 +253,17 @@ class RealtimeTranslator(
             "conversation.item.input_audio_transcription.failed" -> {
                 Logger.w(LOG_TAG, "heard: <failed> " + ev.optJSONObject("error")?.optString("message"))
             }
-            "error" -> onState("error: " + ev.optJSONObject("error")?.optString("message"))
+            "error" -> {
+                val msg = ev.optJSONObject("error")?.optString("message").orEmpty()
+                onState("error: " + msg)
+                // 网关不认 input_audio_transcription 时，整条会话会卡在「没 ready」，
+                // 表现就是「一点反应都没有」。去掉它重发一次，至少还能工作。
+                if (withTranscription && msg.contains("transcription", true)) {
+                    withTranscription = false
+                    Logger.w(LOG_TAG, "input transcription rejected, retry without it")
+                    socket?.send(sessionPayload().toString())
+                }
+            }
             // 未知事件一律记一行：协议字段名一旦变了（text 模态的事件名尤其容易变），
             // 没有这行就只能靠猜。
             else -> Logger.d(LOG_TAG, "event " + ev.optString("type"))
@@ -833,6 +884,7 @@ class RealtimeTranslator(
 
     fun stop() {
         running = false
+        ready = false
         closeDump()
         // 如果为了耳机麦克风把音频切到了通话模式，退出时一定要还回去。
         runCatching { AudioRouter.reset(ctx) }
