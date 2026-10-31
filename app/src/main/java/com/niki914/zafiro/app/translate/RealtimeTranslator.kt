@@ -274,6 +274,9 @@ class RealtimeTranslator(
 
     /** 上一次提交之后又攒够一帧就算有话说；用来避免空提交。 */
     @Volatile private var samplesSinceCommit = 0L
+    /** 这一批的响度累计：低于门槛就不提交，否则会把静音送去识别、模型照样开口说话。 */
+    @Volatile private var sumSq: Long = 0
+    @Volatile private var sumCount: Long = 0
     @Volatile private var lastCommitAt = 0L
     private var vadFloor = 300.0
     @Volatile private var lastVoiceAt = 0L
@@ -282,6 +285,16 @@ class RealtimeTranslator(
     /** 提交当前缓冲并要一句回答。失败只记日志，不抛。 */
     private fun commitTurn(reason: String) {
         if (samplesSinceCommit < 4_800L) {   // <0.3s 不值得提交
+            return
+        }
+        // 静音不提交：实测每 4 秒送 1 秒静音，模型照样回一大段语音，
+        // 半双工随即把麦克风静音，形成「越听越聋」的循环。
+        val rms = if (sumCount > 0) Math.sqrt(sumSq.toDouble() / sumCount) else 0.0
+        if (rms < 800.0) {
+            Logger.i(LOG_TAG, "commit skipped (quiet) rms=" + rms.toInt() + " samples=" + samplesSinceCommit)
+            samplesSinceCommit = 0
+            sumSq = 0
+            sumCount = 0
             return
         }
         val s = socket ?: return
@@ -308,6 +321,8 @@ class RealtimeTranslator(
             "commit (" + reason + ") samples=" + samplesSinceCommit + " ok=" + ok,
         )
         samplesSinceCommit = 0
+        sumSq = 0
+        sumCount = 0
         lastCommitAt = System.currentTimeMillis()
     }
 
@@ -336,6 +351,7 @@ class RealtimeTranslator(
     private val chanFloor = DoubleArray(2) { 300.0 }
     @Volatile private var liveChannel = -1
     private var lastSwitchAt = 0L
+    private var silentFrames = 0
 
     private fun pickChannel(raw: ShortArray, n: Int, out: ShortArray): Int {
         val frames = n / 2
@@ -365,6 +381,21 @@ class RealtimeTranslator(
                 Logger.i(LOG_TAG, "arb: live=" + (liveChannel + 1) + " L=" + p0 + " R=" + p1)
             }
         } else if (!vadSpeaking && now - lastSwitchAt > 400) {
+            // 锁定的那个声道如果一直没声，就放开重新选一次：
+            // 否则会一直把静音送去识别（heard: 永远为空）。
+            val mineNow = if (liveChannel == 0) e0 else e1
+            val myTh = if (liveChannel == 0) kotlin.math.max(1200.0, chanFloor[0] * 1.35)
+                       else kotlin.math.max(1200.0, chanFloor[1] * 1.35)
+            if (mineNow < myTh) {
+                silentFrames++
+                if (silentFrames >= 15) {          // 约 1.5 秒
+                    Logger.i(LOG_TAG, "arb: release (silent) L=" + p0 + " R=" + p1)
+                    liveChannel = -1
+                    silentFrames = 0
+                }
+            } else {
+                silentFrames = 0
+            }
             val other = 1 - liveChannel
             val mine = if (liveChannel == 0) e0 else e1
             val theirs = if (other == 0) e0 else e1
@@ -504,6 +535,11 @@ class RealtimeTranslator(
                         commitTurn("timer")
                     }
                 }
+                // 响度累计要在「发送之前」，和 samplesSinceCommit 同步
+                var ss = 0L
+                for (i in 0 until n) { val x = buf[i].toInt(); ss += (x * x).toLong() }
+                sumSq += ss
+                sumCount += n
                 val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
                 val sent = socket?.send(JSONObject().put("type", "input_audio_buffer.append").put("audio", b64).toString()) == true
                 if (sent) micBytes += n * 2L
