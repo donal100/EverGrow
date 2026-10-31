@@ -127,7 +127,16 @@ object PyRuntime {
 
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
-            binder?.linkToDeath(deathRecipient, 0)
+            // linkToDeath 在 binder 已经死掉时会抛 DeadObjectException。
+            // 这里是 main 线程的回调，未捕获就直接把整个进程带走 ——
+            // 2026-10-31 12:56 的崩溃（PyRuntime.onServiceConnected -> DeadObjectException）
+            // 就是这么来的：重连窗口里服务端刚死，代理还不死心。
+            if (binder != null) {
+                runCatching { binder.linkToDeath(deathRecipient, 0) }
+                    .onFailure { e ->
+                        runCatching { Logger.w(TAG, "linkToDeath failed: " + e.javaClass.simpleName + " " + e.message) }
+                    }
+            }
             pendingBinder.complete(binder)
         }
 
