@@ -156,7 +156,7 @@ class RealtimeTranslator(
                     // 静音 900ms 才算一句说完，阈值略降，让小声的收音也能触发。
                     .put(
                         "turn_detection",
-                        if (vadMode == "server") {
+                        if (externalAudio || vadMode == "server") {
                             JSONObject()
                                 .put("type", "server_vad")
                                 .put("threshold", 0.4)
@@ -178,9 +178,20 @@ class RealtimeTranslator(
                 return JSONObject().put("type", "session.update").put("session", session)
     }
 
+    /** 已推上去、还没被服务端 commits 的音频毫秒数（外部模式专用看门狗）。 */
+    @Volatile private var pushedMs = 0L
+
     /** 由 DuoStreamEngine 推进来的一路 16k 单声道 PCM。 */
     fun pushPcm(pcm: ShortArray) {
         if (!externalAudio || !running || !ready || pcm.isEmpty()) return
+        pushedMs += pcm.size * 1000L / 16_000L
+        if (pushedMs > 25_000L) {
+            // 服务端上限 30 秒。到了这里说明 VAD 一次都没断句（曾经整段会话就是这样
+            // 卡死的：buffer 溢出 → 每条推送都报错 → 一句翻译都没有）。
+            pushedMs = 0
+            Logger.w(LOG_TAG, "push watchdog: 25s with no commit, clearing buffer")
+            runCatching { socket?.send(JSONObject().put("type", "input_audio_buffer.clear").toString()) }
+        }
         val gain = uplinkGain
         val bytes = ByteArray(pcm.size * 2)
         var p = 0
@@ -207,7 +218,12 @@ class RealtimeTranslator(
                 if (!externalAudio) startMic()
                 Logger.i(LOG_TAG, "session ready external=" + externalAudio + " transcribe=" + withTranscription)
             }
+            "input_audio_buffer.committed", "input_audio_buffer.speech_started" -> {
+                pushedMs = 0
+                Logger.d(LOG_TAG, "buffer event " + ev.optString("type"))
+            }
             "response.created" -> {
+                pushedMs = 0
                 speaking = true; responseDone = false
                 // 听写模式验证过的路子：播报走媒体通道，耳机才会回到 A2DP 出声；
                 // 通话链路（SCO）留着的话 A2DP 是哑的。所以这里先放掉 SCO。
