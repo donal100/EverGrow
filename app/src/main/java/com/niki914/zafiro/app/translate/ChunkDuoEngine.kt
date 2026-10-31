@@ -1,6 +1,8 @@
 package com.niki914.zafiro.app.translate
 
 import android.content.Context
+import android.media.AudioAttributes
+import android.media.MediaPlayer
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
@@ -17,17 +19,16 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 /**
- * 双人模式的切片引擎：**一次请求送两路音频**。
+ * 双人模式的切片引擎：**一次请求送两路音频**，模型分别标注 A / B。
  *
- * 为什么要这样做：实测 qwen3.5-omni-plus 一次能收两段音频，并且能分别标注
- * A / B（两个文件各自听完再分别翻译）。于是不需要「仲裁选一个麦」，
- * 也不需要两条会话 —— 两个人同时说话也能各自出字幕。
+ * 实测 qwen3.5-omni-plus 能同时收两段音频并分别给结果，所以不需要
+ * 「仲裁选一个麦」，两个人同时说话也能各自出字幕。
  *
- * 每次请求带上一小段滚动上下文（最近 6 行），让模型知道「它」「那个」指什么；
- * 不带全量转写，那既贵又没用。
+ * 每段按静音切句（两侧都安静 1.2 秒算说完，最长 6 秒），带最近 6 行上下文；
+ * 相同的一句连着出现会跳过（切片边界常常覆盖同一句）。
  *
- * 输出：每路一行，格式 `A: <英文>` / `B: <英文>`；模型判定为噪声或无关的
- * 会返回 `A: (skip)`，我们就不上屏。
+ * 说话：每行译文用 qwen3-tts-flash 合成（英文 Serena / 粤语 Rocky），
+ * 播到「对面那只耳朵」——A 的话给 B（右声道），B 的话给 A（左声道）。
  */
 class ChunkDuoEngine(
     private val ctx: Context,
@@ -39,35 +40,43 @@ class ChunkDuoEngine(
     private companion object {
         const val TAG = "niki914_zafiro_ChunkDuo"
         const val RATE_OUT = 16_000
-        /** 最短一段：太短没意义。 */
         const val MIN_CHUNK_MS = 1_200
-        /** 最长一段：一直说不停也要切，否则延迟无限增长。 */
         const val MAX_CHUNK_MS = 6_000
-        /** 安静这么久就算一句说完（两侧都安静）。 */
         const val SILENCE_MS = 1_200
         const val MIN_RMS = 700.0
         const val CONTEXT_LINES = 6
         const val ENDPOINT = "https://maas.qwencloudapi.com/compatible-mode/v1/chat/completions"
+        const val TTS_ENDPOINT = "https://maas.qwencloudapi.com/api/v1/services/aigc/multimodal-generation/generation"
+        const val BLEED = 0.12f
     }
 
     @Volatile private var running = false
     private var record: AudioRecord? = null
     private var thread: Thread? = null
     private val io = Executors.newSingleThreadExecutor { r -> Thread(r, "duo-asr") }
+    private val speakIo = Executors.newSingleThreadExecutor { r -> Thread(r, "duo-tts") }
     private val http = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
         .build()
-    /** 每个说话人上一次上屏的文字：相邻两片往往重复同一句，去掉。 */
-    private val lastLine = HashMap<String, String>()
 
+    /** 每个说话人上一次上屏的文字：相邻两片常常重复同一句。 */
+    private val lastLine = HashMap<String, String>()
     /** 滚动上下文：最近几句已上屏的字幕。 */
     private val context = ArrayDeque<String>()
+    private var player: MediaPlayer? = null
+
+    private val speechOn = runCatching {
+        File(ctx.filesDir, "voice_tuning.txt").readLines()
+            .firstOrNull { it.trim().startsWith("translate_voice=") }
+            ?.substringAfter("=")?.trim() != "0"
+    }.getOrDefault(true)
 
     fun start() {
         if (running) return
         running = true
         onState("connecting")
+        Logger.i(TAG, "speech=" + speechOn)
         thread = Thread { loop() }.apply { isDaemon = true; name = "duo-mic"; start() }
     }
 
@@ -76,6 +85,8 @@ class ChunkDuoEngine(
         runCatching { record?.stop() }
         runCatching { record?.release() }
         record = null
+        runCatching { player?.release() }
+        player = null
         onState("stopped")
     }
 
@@ -97,15 +108,14 @@ class ChunkDuoEngine(
         runCatching { rec.startRecording() }
         onState("ready")
 
-        // 按静音切句：固定 3 秒会把「一只黑猫在……」这样的半句切掉。
         val maxFrames = rate / 1000 * MAX_CHUNK_MS
         val minFrames = rate / 1000 * MIN_CHUNK_MS
-        val silenceFramesNeeded = rate / 1000 * SILENCE_MS
+        val silenceNeeded = rate / 1000 * SILENCE_MS
         val left = ShortArray(maxFrames)
         val right = ShortArray(maxFrames)
         var fill = 0
         var silent = 0
-        val buf = ShortArray(9600)               // 100 ms stereo
+        val buf = ShortArray(9600)
 
         while (running) {
             val n = runCatching { rec.read(buf, 0, buf.size) }.getOrDefault(-1)
@@ -123,16 +133,15 @@ class ChunkDuoEngine(
                     fill++
                 }
             }
-            // 两侧都安静才算静音：一个人在说，另一个人那边自然是安静的。
             if (peak < 900) silent += frames else silent = 0
-            val done = (fill >= minFrames && silent >= silenceFramesNeeded) || fill >= maxFrames
+            val done = (fill >= minFrames && silent >= silenceNeeded) || fill >= maxFrames
             if (done) {
-                val n0 = fill
-                val l = left.copyOf(n0)
-                val r = right.copyOf(n0)
+                val len = fill
+                val l = left.copyOf(len)
+                val r = right.copyOf(len)
                 fill = 0
                 silent = 0
-                Logger.i(TAG, "chunk frames=" + n0 + " (" + (n0 * 1000 / rate) + "ms)")
+                Logger.i(TAG, "chunk " + (len * 1000 / rate) + "ms")
                 io.execute { ask(l, r) }
             }
         }
@@ -151,15 +160,15 @@ class ChunkDuoEngine(
         if (key.isEmpty()) { Logger.w(TAG, "no key"); return }
         val ctxText = if (context.isEmpty()) "(none yet)" else context.joinToString("\n")
         val prompt = """
-            You are a two-person interpreter. Two audio streams follow: A is the person wearing
-            transmitter A, B is the person wearing transmitter B. Both may speak at once.
+            You are a two-person interpreter. Two audio streams follow: A is the person
+            wearing transmitter A, B is the person wearing transmitter B. Both may speak at once.
             Recent conversation:
             $ctxText
 
             $instructions
 
             Reply with exactly two lines:
-            A: <English translation, or (skip) if this stream has no speech, is noise, or is not worth relaying>
+            A: <translation, or (skip) if this stream has no speech, is noise, or is not worth relaying>
             B: <same rule>
             No other text.
         """.trimIndent()
@@ -187,6 +196,7 @@ class ChunkDuoEngine(
             }
         }.getOrNull() ?: return
         Logger.i(TAG, "duo took=" + (System.currentTimeMillis() - t0) + "ms " + body.replace("\n", " ").take(100))
+
         for (line in body.lines()) {
             val t = line.trim()
             if (t.isEmpty()) continue
@@ -196,8 +206,7 @@ class ChunkDuoEngine(
             val text = t.substring(2).trim()
             if (text.isEmpty() || text.startsWith("(skip", true)) continue
             val who = if (isA) "A" else "B"
-            val prev = lastLine[who].orEmpty()
-            if (text == prev) {
+            if (text == lastLine[who]) {
                 Logger.i(TAG, "duo skip repeat " + who + ": " + text.take(40))
                 continue
             }
@@ -205,7 +214,58 @@ class ChunkDuoEngine(
             context.addLast("$who: $text")
             while (context.size > CONTEXT_LINES) context.removeFirst()
             onLine("$who：$text")
+            // A 的话进 B 的耳朵（右），B 的话进 A 的耳朵（左）。
+            if (speechOn) {
+                val toRight = who == "A"
+                speakIo.execute { runCatching { say(text, toRight) } }
+            }
         }
+    }
+
+    /** 合成一句并播到指定的一侧。中文用 Rocky，其余用 Serena。 */
+    private fun say(text: String, toRight: Boolean) {
+        val hasHan = text.any { it.code in 0x3400..0x4DBF || it.code in 0x4E00..0x9FFF }
+        val voice = if (hasHan) "Rocky" else "Serena"
+        val lang = if (hasHan) "chinese" else "English"
+        val key = runCatching { File(ctx.filesDir, "qwen_asr_key.txt").readText().trim() }.getOrNull().orEmpty()
+        if (key.isEmpty()) return
+        val payload = JSONObject()
+            .put("model", "qwen3-tts-flash")
+            .put("input", JSONObject().put("text", text).put("voice", voice).put("language_type", lang))
+        val body = runCatching {
+            http.newCall(
+                Request.Builder().url(TTS_ENDPOINT)
+                    .addHeader("Authorization", "Bearer " + key)
+                    .post(payload.toString().toRequestBody("application/json".toMediaType()))
+                    .build(),
+            ).execute().use { resp ->
+                if (!resp.isSuccessful) { Logger.w(TAG, "tts http " + resp.code); null }
+                else JSONObject(resp.body?.string().orEmpty())
+                    .getJSONObject("output").getJSONObject("audio").optString("url").ifEmpty { null }
+            }
+        }.getOrNull() ?: return
+        val audio = runCatching { http.newCall(Request.Builder().url(body).build()).execute().use { it.body?.bytes() } }.getOrNull() ?: return
+        val f = File(ctx.cacheDir, "duo_tts_" + System.currentTimeMillis() + ".mp3")
+        runCatching { f.writeBytes(audio) }.getOrElse { return }
+        val mp = runCatching {
+            MediaPlayer().apply {
+                setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .build(),
+                )
+                setDataSource(f.absolutePath)
+                prepare()
+                // 分声道：A 的话只进右耳，B 的话只进左耳，另一侧留一点底噪。
+                if (toRight) setVolume(BLEED, 1f) else setVolume(1f, BLEED)
+            }
+        }.getOrNull() ?: return
+        runCatching { player?.release() }
+        player = mp
+        runCatching { mp.start() }
+        Logger.i(TAG, "say " + (if (toRight) "right" else "left") + " voice=" + voice + " " + text.take(30))
+        runCatching { f.delete() }
     }
 
     private fun audioPart(pcm: ShortArray): JSONObject {
