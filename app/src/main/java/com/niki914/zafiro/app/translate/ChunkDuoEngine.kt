@@ -58,6 +58,9 @@ class ChunkDuoEngine(
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
         .build()
+    /** 每个说话人上一次上屏的文字：相邻两片往往重复同一句，去掉。 */
+    private val lastLine = HashMap<String, String>()
+
     /** 滚动上下文：最近几句已上屏的字幕。 */
     private val context = ArrayDeque<String>()
 
@@ -193,6 +196,12 @@ class ChunkDuoEngine(
             val text = t.substring(2).trim()
             if (text.isEmpty() || text.startsWith("(skip", true)) continue
             val who = if (isA) "A" else "B"
+            val prev = lastLine[who].orEmpty()
+            if (text == prev) {
+                Logger.i(TAG, "duo skip repeat " + who + ": " + text.take(40))
+                continue
+            }
+            lastLine[who] = text
             context.addLast("$who: $text")
             while (context.size > CONTEXT_LINES) context.removeFirst()
             onLine("$who：$text")
