@@ -38,7 +38,7 @@ class CaptionActivity : Activity() {
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.BLACK)
-            val m = GlassesCaptions.margin(this)
+            val m = GlassesCaptions.margin(this@CaptionActivity)
             setPadding(m, 40, m, 40)
         }
         val sp = GlassesCaptions.fontSize(this)
