@@ -108,6 +108,18 @@ object GlassesCaptions {
         }.onFailure { Logger.w(TAG, "overlay failed " + it.javaClass.simpleName) }
     }
 
+
+    /**
+     * 字幕字号：voice_tuning.txt 里的 glasses_font=40（sp，18..96）。
+     * 眼镜的视野和投影尺寸因人而异，字号只能由用户按自己的眼睛定；
+     * 改成文件里的一个数字就能调，不必重新编译。
+     */
+    fun fontSize(ctx: Context): Float = runCatching {
+        File(ctx.filesDir, "voice_tuning.txt").readLines()
+            .firstOrNull { it.trim().startsWith("glasses_font=") }
+            ?.substringAfter("=")?.trim()?.toFloatOrNull()?.coerceIn(18f, 96f) ?: 40f
+    }.getOrDefault(40f)
+
     fun detach() {
         runCatching { listener?.let { dm?.unregisterDisplayListener(it) } }
         listener = null
@@ -181,7 +193,7 @@ object GlassesCaptions {
         // 只显示当前这一句：历史越多，眼睛越要在一堆同样的白字里找最新那行。
         private val text = TextView(ctx).apply {
             setTextColor(Color.WHITE)
-            setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 40f)
+            setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, fontSize(ctx))
             setLineSpacing(8f, 1f)
             gravity = Gravity.CENTER
             layoutParams = LinearLayout.LayoutParams(
