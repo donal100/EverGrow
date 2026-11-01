@@ -136,6 +136,18 @@ object GlassesCaptions {
         else -> Gravity.TOP or Gravity.CENTER_HORIZONTAL
     }
 
+
+    /**
+     * 左右留白：voice_tuning.txt 的 glasses_margin=140（像素）。
+     * 满宽的一行字会一直顶到镜片边缘，那里既不清楚也在视野之外；
+     * 两侧收进来，一句话就落在视野中段。
+     */
+    fun margin(ctx: Context): Int = runCatching {
+        File(ctx.filesDir, "voice_tuning.txt").readLines()
+            .firstOrNull { it.trim().startsWith("glasses_margin=") }
+            ?.substringAfter("=")?.trim()?.toIntOrNull()?.coerceIn(0, 600) ?: 140
+    }.getOrDefault(140)
+
     fun detach() {
         runCatching { listener?.let { dm?.unregisterDisplayListener(it) } }
         listener = null
@@ -202,7 +214,7 @@ object GlassesCaptions {
         private val box = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.BLACK)
-            setPadding(96, 36, 96, 36)
+            setPadding(margin(ctx), 36, margin(ctx), 36)
         }
 
         // 只显示当前这一句：历史越多，眼睛越要在一堆同样的白字里找最新那行。
