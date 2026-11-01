@@ -91,6 +91,23 @@ object GlassesCaptions {
     private fun refresh() {
         val m = dm ?: return
         val a = app ?: return
+        // 先把看到的每一块屏写进日志：镜像模式下应用可能只看到一块，
+        // 那时无论怎么挂都挂不上，必须由用户在系统里切成「扩展」。
+        runCatching {
+            m.displays.forEach { d ->
+                val mode = runCatching { d.mode }.getOrNull()
+                Logger.i(
+                    TAG,
+                    "display id=" + d.displayId + " name=" + d.name +
+                        " flags=0x" + Integer.toHexString(d.flags) +
+                        " valid=" + d.isValid + " state=" + d.state +
+                        " size=" + (mode?.physicalWidth ?: -1) + "x" + (mode?.physicalHeight ?: -1),
+                )
+            }
+        }
+        if (m.displays.size <= 1 && presentation == null) {
+            Logger.i(TAG, "no external display visible (count=" + m.displays.size + ")")
+        }
         val target = runCatching {
             m.displays.firstOrNull { it.displayId != Display.DEFAULT_DISPLAY }
         }.getOrNull()
@@ -102,11 +119,20 @@ object GlassesCaptions {
         val current = presentation
         if (current != null && current.display.displayId == target.displayId) return
         runCatching { current?.dismiss() }
-        val p = runCatching { CaptionPresentation(a, target) }.getOrNull() ?: return
-        runCatching { p.show() }
-        presentation = p
-        p.render(Translator.snapshotLines())
-        Logger.i(TAG, "showing on display=" + target.displayId + " " + target.name)
+        // 失败也要留下原因：SecurityException（私有屏）和「屏不存在」是两件事。
+        runCatching {
+            val p = CaptionPresentation(a, target)
+            p.show()
+            presentation = p
+            p.render(Translator.snapshotLines())
+            Logger.i(TAG, "showing on display=" + target.displayId + " " + target.name)
+        }.onFailure { e ->
+            Logger.w(
+                TAG,
+                "presentation failed on " + target.displayId + ": " +
+                    e.javaClass.simpleName + " " + (e.message ?: ""),
+            )
+        }
     }
 
     private class CaptionPresentation(ctx: Context, display: Display) : Presentation(ctx, display) {
