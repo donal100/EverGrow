@@ -357,10 +357,16 @@ class RealtimeTranslator(
         // 静音不提交：实测每 4 秒送 1 秒静音，模型照样回一大段语音，
         // 半双工随即把麦克风静音，形成「越听越聋」的循环。
         val rms = if (sumCount > 0) Math.sqrt(sumSq.toDouble() / sumCount) else 0.0
-        if (rms < 1200.0) {
+        // 门槛跟着底噪走：内置麦克风实测 rms 700-900，写死 1200 等于把人声全丢掉。
+        val gate = kotlin.math.max(450.0, vadFloor * 1.6)
+        if (rms < gate) {
             // 门槛从 800 提到 1200：实测 700-900 的房间底噪一样能让模型编出
             // 「I.」「哈喽。」这样的字幕。跳过时把计时也推后，避免每秒重试一次。
-            Logger.i(LOG_TAG, "commit skipped (quiet) rms=" + rms.toInt() + " samples=" + samplesSinceCommit)
+            Logger.i(
+                LOG_TAG,
+                "commit skipped (quiet) rms=" + rms.toInt() + " gate=" + gate.toInt() +
+                    " floor=" + vadFloor.toInt() + " samples=" + samplesSinceCommit,
+            )
             samplesSinceCommit = 0
             sumSq = 0
             sumCount = 0
@@ -587,8 +593,8 @@ class RealtimeTranslator(
                         if (a > peak) peak = a
                     }
                     val now = System.currentTimeMillis()
-                    val onset = kotlin.math.max(1200.0, vadFloor * 1.35)
-                    val quietThr = kotlin.math.max(700.0, vadFloor * 1.05)
+                    val onset = kotlin.math.max(700.0, vadFloor * 1.6)
+                    val quietThr = kotlin.math.max(450.0, vadFloor * 1.05)
                     if (!vadSpeaking) vadFloor = vadFloor * 0.97 + peak * 0.03
                     if (peak > quietThr) lastVoiceAt = now
                     if (!vadSpeaking && peak > onset) {
