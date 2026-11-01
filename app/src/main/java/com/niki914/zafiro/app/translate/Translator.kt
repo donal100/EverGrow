@@ -239,7 +239,15 @@ object Translator {
         // 路由是确定的：A 的话进 B 的耳朵，B 的话进 A 的耳朵。
         // 双人实时：两路音频各自一条会话。谁在说话由「哪条声道」决定，
         // 每条会话锁死一种源语言，听见别的就 skip —— 串音在源头就被挡住。
-        if (twoWay && engineMode() == "duo-stream") {
+        // 双人实时靠「一个声道一个人」，这只有立体声 USB 接收器才成立。
+        // 手机内置麦克风是单声道、两个人混在一条轨上，硬开会把两个人的话
+        // 分别当成两个人的独白（一装上就报 no usb mic，等于什么都不做）。
+        // 所以没有 USB 麦克风时退回原来的单会话双向实时，至少能用。
+        val usbDuo = AudioRouter.usbMic(app) != null
+        if (twoWay && engineMode() == "duo-stream" && !usbDuo) {
+            Logger.w(LOG_TAG, "duo-stream needs the USB stereo receiver; falling back to single session")
+        }
+        if (twoWay && engineMode() == "duo-stream" && usbDuo) {
             val g = gen
             duoStream = DuoStreamEngine(
                 app,
