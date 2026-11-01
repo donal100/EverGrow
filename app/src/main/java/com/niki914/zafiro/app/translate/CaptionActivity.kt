@@ -41,9 +41,10 @@ class CaptionActivity : Activity() {
             setBackgroundColor(Color.BLACK)
             setPadding(96, 60, 96, 60)
         }
+        val sp = GlassesCaptions.fontSize(this)
         text = TextView(this).apply {
             setTextColor(Color.WHITE)
-            setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, GlassesCaptions.fontSize(this))
+            setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 40f)
             setLineSpacing(8f, 1f)
             gravity = Gravity.CENTER
             layoutParams = LinearLayout.LayoutParams(
