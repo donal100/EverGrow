@@ -96,6 +96,13 @@
             </intent-filter>
         </activity>
 
+        <!-- 眼镜/镜像用的全屏字幕页：纯黑底白字，退出靠返回键或停止翻译。 -->
+        <activity
+            android:name="com.niki914.zafiro.app.translate.CaptionActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen" />
+
         <!--
             文本选择菜单入口。不写 android:label：弹层会回落到应用名，写了只是重复。
             三个 filter 元素都必需：隐式 intent 需要 category.DEFAULT，text/* 覆盖

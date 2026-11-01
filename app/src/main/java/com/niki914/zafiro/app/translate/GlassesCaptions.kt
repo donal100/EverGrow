@@ -75,6 +75,39 @@ object GlassesCaptions {
         Logger.i(TAG, "caption surface attached displays=" + m.displays.size)
     }
 
+    /** 眼镜插着吗：按 USB 音频设备名判断（XREAL / Nreal）。 */
+    private fun glassesPresent(ctx: Context): Boolean = runCatching {
+        val am = ctx.getSystemService(Context.AUDIO_SERVICE) as? android.media.AudioManager
+            ?: return@runCatching false
+        am.getDevices(android.media.AudioManager.GET_DEVICES_OUTPUTS).any { d ->
+            (d.productName ?: "").toString().lowercase().let {
+                it.contains("xreal") || it.contains("nreal")
+            }
+        }
+    }.getOrDefault(false)
+
+    /**
+     * 镜像模式下应用拿不到第二块屏，于是改在这块屏上画全屏字幕：
+     * 系统镜像会把这一页原样送到眼镜，黑底在光学上等于透明，只剩白字。
+     * glasses_overlay=0 可以关掉。
+     */
+    private fun overlayWanted(ctx: Context): Boolean = runCatching {
+        File(ctx.filesDir, "voice_tuning.txt").readLines()
+            .firstOrNull { it.trim().startsWith("glasses_overlay=") }
+            ?.substringAfter("=")?.trim() != "0"
+    }.getOrDefault(true)
+
+    private fun showOverlay(ctx: Context) {
+        if (!overlayWanted(ctx) || !glassesPresent(ctx)) return
+        runCatching {
+            ctx.startActivity(
+                android.content.Intent(ctx, CaptionActivity::class.java)
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+            Logger.i(TAG, "caption overlay launched (mirror mode)")
+        }.onFailure { Logger.w(TAG, "overlay failed " + it.javaClass.simpleName) }
+    }
+
     fun detach() {
         runCatching { listener?.let { dm?.unregisterDisplayListener(it) } }
         listener = null
@@ -114,6 +147,7 @@ object GlassesCaptions {
         if (target == null) {
             runCatching { presentation?.dismiss() }
             presentation = null
+            showOverlay(a)
             return
         }
         val current = presentation
