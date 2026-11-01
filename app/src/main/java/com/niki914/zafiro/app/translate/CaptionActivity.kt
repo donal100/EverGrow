@@ -37,9 +37,8 @@ class CaptionActivity : Activity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
             setBackgroundColor(Color.BLACK)
-            setPadding(96, 60, 96, 60)
+            setPadding(96, 40, 96, 40)
         }
         val sp = GlassesCaptions.fontSize(this)
         text = TextView(this).apply {
@@ -52,6 +51,7 @@ class CaptionActivity : Activity() {
                 ViewGroup.LayoutParams.WRAP_CONTENT,
             )
         }
+        box.gravity = GlassesCaptions.gravity(this)
         box.addView(text)
         setContentView(box)
         Logger.i(TAG, "caption activity shown")

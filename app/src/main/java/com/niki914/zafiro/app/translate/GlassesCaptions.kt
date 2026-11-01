@@ -120,6 +120,22 @@ object GlassesCaptions {
             ?.substringAfter("=")?.trim()?.toFloatOrNull()?.coerceIn(18f, 96f) ?: 40f
     }.getOrDefault(40f)
 
+
+    /**
+     * 字幕贴在哪：voice_tuning.txt 的 glasses_pos=top|center|bottom（默认 top）。
+     * 默认放最上面是有原因的 —— 戴着眼镜看别的东西（电视、舞台、街上招牌）时，
+     * 字幕占住顶部，画面其余部分一点不挡。
+     */
+    fun gravity(ctx: Context): Int = when (runCatching {
+        File(ctx.filesDir, "voice_tuning.txt").readLines()
+            .firstOrNull { it.trim().startsWith("glasses_pos=") }
+            ?.substringAfter("=")?.trim()?.lowercase() ?: "top"
+    }.getOrDefault("top")) {
+        "center" -> Gravity.CENTER_VERTICAL or Gravity.CENTER_HORIZONTAL
+        "bottom" -> Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+        else -> Gravity.TOP or Gravity.CENTER_HORIZONTAL
+    }
+
     fun detach() {
         runCatching { listener?.let { dm?.unregisterDisplayListener(it) } }
         listener = null
@@ -185,9 +201,8 @@ object GlassesCaptions {
 
         private val box = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
             setBackgroundColor(Color.BLACK)
-            setPadding(96, 48, 96, 48)
+            setPadding(96, 36, 96, 36)
         }
 
         // 只显示当前这一句：历史越多，眼睛越要在一堆同样的白字里找最新那行。
@@ -203,6 +218,7 @@ object GlassesCaptions {
         }
 
         init {
+            box.gravity = gravity(ctx)
             box.addView(text)
             setContentView(box)
         }
