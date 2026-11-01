@@ -4,6 +4,7 @@ import android.content.Context
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import com.niki914.logging.Logger
+import java.io.File
 
 /**
  * 耳机单向口译的音频路由。
@@ -97,7 +98,7 @@ object AudioRouter {
             AudioDeviceInfo.TYPE_WIRED_HEADSET,
         )
         for (type in order) {
-            val hit = ins.firstOrNull { it.type == type }
+            val hit = ins.firstOrNull { it.type == type && usable(ctx, it) }
             if (hit != null) return hit
         }
         return null
@@ -138,16 +139,59 @@ object AudioRouter {
 
     /** 手机内置麦克风：即使插着耳机也坚持用它。 */
     /**
+     * 眼镜（XREAL / Nreal / Viture / RayNeo / Rokid）在 Android 里同时是一块显示器、
+     * 一张 USB 声卡和一个麦克风。插上之后它就成了「第一个 USB 输入」，
+     * 于是麦克风悄悄换成了眼镜腿上那个朝外的、离嘴很远的麦 —— 识别质量立刻下降，
+     * 而用户看到的现象是「插上眼镜就听不懂了」。
+     *
+     * 眼镜不是我们想要的麦克风：识别要的是贴身的那一路（手机内置或 DJI 接收器）。
+     */
+    private fun isGlasses(d: AudioDeviceInfo): Boolean {
+        val n = (d.productName ?: "").toString().lowercase()
+        if (n.isEmpty()) return false
+        return GLASS_NAMES.any { n.contains(it) }
+    }
+
+    private val GLASS_NAMES = listOf(
+        "xreal", "nreal", "viture", "rayneo", "rokid", "even g", "air 2", "air2", "one pro",
+    )
+
+    /** voice_tuning.txt 的 mic_ignore=foo,bar：按产品名排除任何输入设备。 */
+    private fun ignored(ctx: Context): List<String> = runCatching {
+        File(ctx.filesDir, "voice_tuning.txt").readLines()
+            .firstOrNull { it.trim().startsWith("mic_ignore=") }
+            ?.substringAfter("=")?.split(",")?.map { it.trim().lowercase() }
+            ?.filter { it.isNotEmpty() } ?: emptyList()
+    }.getOrDefault(emptyList())
+
+    /** 不是眼镜、也不在忽略名单里。 */
+    private fun usable(ctx: Context, d: AudioDeviceInfo): Boolean {
+        if (isGlasses(d)) return false
+        val n = (d.productName ?: "").toString().lowercase()
+        return ignored(ctx).none { n.contains(it) }
+    }
+
+    /**
      * USB 输入（会议麦克风、声卡）：比手机内置麦克风更近、更宽，也不占蓝牙链路。
      * 用户要求：插着 USB 就用 USB，没插才回落到手机麦克风。
+     *
+     * 顺带把「真麦克风」排在「耳机/眼镜那类 USB 声卡」前面：DJI 接收器这类设备
+     * 的类型是 USB_DEVICE，而耳机形态的一律报 USB_HEADSET。
      */
     fun usbMic(ctx: Context): AudioDeviceInfo? {
         val am = ctx.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return null
-        return am.getDevices(AudioManager.GET_DEVICES_INPUTS).firstOrNull { d ->
+        val usb = am.getDevices(AudioManager.GET_DEVICES_INPUTS).filter { d ->
             d.type == AudioDeviceInfo.TYPE_USB_DEVICE ||
                 d.type == AudioDeviceInfo.TYPE_USB_HEADSET ||
                 d.type == AudioDeviceInfo.TYPE_USB_ACCESSORY
         }
+        val usable = usb.filter { usable(ctx, it) }
+        if (usable.size != usb.size) {
+            usb.filterNot { usable(ctx, it) }.forEach {
+                Logger.i(TAG, "mic skip (glasses/ignored) " + it.productName)
+            }
+        }
+        return usable.firstOrNull { it.type == AudioDeviceInfo.TYPE_USB_DEVICE } ?: usable.firstOrNull()
     }
 
     /** 翻译/听写默认输入：USB 优先，否则手机内置麦克风。 */
@@ -167,11 +211,16 @@ object AudioRouter {
         while (true) {
             tries++
             val ins = runCatching { am.getDevices(AudioManager.GET_DEVICES_INPUTS) }.getOrNull()
-            val usb = ins?.firstOrNull { d ->
-                d.type == AudioDeviceInfo.TYPE_USB_DEVICE ||
+            val usb = ins?.filter { d ->
+                (d.type == AudioDeviceInfo.TYPE_USB_DEVICE ||
                     d.type == AudioDeviceInfo.TYPE_USB_HEADSET ||
-                    d.type == AudioDeviceInfo.TYPE_USB_ACCESSORY
-            }
+                    d.type == AudioDeviceInfo.TYPE_USB_ACCESSORY) && usable(ctx, d)
+            }?.firstOrNull { it.type == AudioDeviceInfo.TYPE_USB_DEVICE }
+                ?: ins?.filter { d ->
+                    (d.type == AudioDeviceInfo.TYPE_USB_DEVICE ||
+                        d.type == AudioDeviceInfo.TYPE_USB_HEADSET ||
+                        d.type == AudioDeviceInfo.TYPE_USB_ACCESSORY) && usable(ctx, d)
+                }?.firstOrNull()
             Logger.i(
                 TAG,
                 "usbMicWait try=" + tries + " inputs=" + (ins?.size ?: -1) +
