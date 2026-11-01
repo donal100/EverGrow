@@ -173,40 +173,30 @@ object GlassesCaptions {
 
         private val box = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_VERTICAL
+            gravity = Gravity.CENTER
             setBackgroundColor(Color.BLACK)
-            setPadding(72, 48, 72, 48)
+            setPadding(96, 48, 96, 48)
         }
 
-        private val rows = (0 until LINES).map {
-            TextView(ctx).apply {
-                setTextColor(Color.WHITE)
-                setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 34f)
-                setLineSpacing(6f, 1f)
-                layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                )
-                text = ""
-            }
+        // 只显示当前这一句：历史越多，眼睛越要在一堆同样的白字里找最新那行。
+        private val text = TextView(ctx).apply {
+            setTextColor(Color.WHITE)
+            setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 40f)
+            setLineSpacing(8f, 1f)
+            gravity = Gravity.CENTER
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            )
         }
 
         init {
-            rows.forEach { box.addView(it) }
+            box.addView(text)
             setContentView(box)
         }
 
-        /** 只留最后几行；最新一行最亮，旧的灰一点，眼睛自然落在最新那句。 */
         fun render(lines: List<String>) {
-            runCatching {
-                val tail = lines.takeLast(LINES)
-                rows.forEachIndexed { i, tv ->
-                    val idx = tail.size - rows.size + i
-                    val text = if (idx >= 0 && idx < tail.size) tail[idx] else ""
-                    tv.text = text
-                    tv.alpha = if (text.isBlank()) 0f else 0.45f + 0.55f * ((i + 1).toFloat() / rows.size)
-                }
-            }
+            runCatching { text.text = lines.lastOrNull().orEmpty() }
         }
     }
 }

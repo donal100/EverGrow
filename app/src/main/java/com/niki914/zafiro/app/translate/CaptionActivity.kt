@@ -26,10 +26,9 @@ class CaptionActivity : Activity() {
 
     private companion object {
         const val TAG = "niki914_zafiro_Glasses"
-        const val LINES = 5
     }
 
-    private lateinit var rows: List<TextView>
+    private lateinit var text: TextView
     private val main = Handler(Looper.getMainLooper())
     private var version = -1
 
@@ -38,22 +37,21 @@ class CaptionActivity : Activity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_VERTICAL
+            gravity = Gravity.CENTER
             setBackgroundColor(Color.BLACK)
-            setPadding(80, 60, 80, 60)
+            setPadding(96, 60, 96, 60)
         }
-        rows = (0 until LINES).map {
-            TextView(this).apply {
-                setTextColor(Color.WHITE)
-                setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 34f)
-                setLineSpacing(6f, 1f)
-                layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                )
-            }
+        text = TextView(this).apply {
+            setTextColor(Color.WHITE)
+            setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 40f)
+            setLineSpacing(8f, 1f)
+            gravity = Gravity.CENTER
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            )
         }
-        rows.forEach { box.addView(it) }
+        box.addView(text)
         setContentView(box)
         Logger.i(TAG, "caption activity shown")
         main.post(ticker)
@@ -76,13 +74,7 @@ class CaptionActivity : Activity() {
     }
 
     private fun render(lines: List<String>) {
-        val tail = lines.takeLast(LINES)
-        rows.forEachIndexed { i, tv ->
-            val idx = tail.size - rows.size + i
-            val text = if (idx >= 0 && idx < tail.size) tail[idx] else ""
-            tv.text = text
-            tv.alpha = if (text.isBlank()) 0f else 0.45f + 0.55f * ((i + 1).toFloat() / rows.size)
-        }
+        text.text = lines.lastOrNull().orEmpty()
     }
 
     override fun onDestroy() {
