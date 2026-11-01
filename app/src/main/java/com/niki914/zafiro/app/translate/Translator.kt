@@ -196,6 +196,8 @@ object Translator {
         }
         state = "connecting"
         clearLines()
+        // 插着眼镜（外接显示器）时，字幕另开一块屏显示，手机这边照常用。
+        runCatching { GlassesCaptions.attach(app) }
         val gen = ++generation
         // 两种模式彻底分开：
         //   双人（two-way / two-way-yue）出声 —— 面对面说话时没人愿意盯着屏幕读，
@@ -390,6 +392,7 @@ object Translator {
     }
 
     fun stopRealtime() {
+        runCatching { GlassesCaptions.detach() }
         generation++          // 让旧 socket 迟到的回调写不进来
         realtime?.stop()
         realtime = null
