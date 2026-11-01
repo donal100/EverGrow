@@ -57,6 +57,8 @@ object Translator {
     @Volatile private var duo: ChunkDuoEngine? = null
     /** 双人实时：一个声道一条 realtime 会话（默认）。 */
     @Volatile private var duoStream: DuoStreamEngine? = null
+    /** 单路字幕：直连专用实时翻译模型，没有 TTS 往返也没有我们的断句计时器。 */
+    @Volatile private var live: LiveTranslateCaptionEngine? = null
     @Volatile private var cantoneseSpeaker: CantoneseSpeaker? = null
 
     /** 每次 startRealtime 递增；旧的 socket 回调据此丢弃，避免覆盖新会话状态。 */
@@ -139,7 +141,8 @@ object Translator {
     }
 
     val isRunning: Boolean
-        get() = session != null || realtime != null || chunk != null || duo != null || duoStream != null
+        get() = session != null || realtime != null || chunk != null || duo != null ||
+            duoStream != null || live != null
     val mode: String get() = direction
     val audioRoute: String get() = routing
 
@@ -170,7 +173,7 @@ object Translator {
      * 目标语言锁定（en / zh），输出走耳机。
      */
     fun startRealtime(ctx: Context, mode: String) {
-        if (realtime != null || chunk != null || duo != null || duoStream != null) return
+        if (realtime != null || chunk != null || duo != null || duoStream != null || live != null) return
         val app = ctx.applicationContext
         appCtx = app
         direction = mode
@@ -302,6 +305,35 @@ object Translator {
             return
         }
 
+        // 单路字幕（translate everything）：直接开专用实时翻译会话。
+        // 目标语言是已知的、源语言交给模型自己听，所以这条路上没有方向判断、
+        // 没有串音门槛、也没有 TTS —— 它只需要「听见什么就译成英文」。
+        // translate_engine=realtime 可以回到旧的通用实时路径。
+        if (!twoWay && engineMode() != "realtime") {
+            val g = gen
+            val target = if (mode == "to-chinese") "zh" else "en"
+            live = LiveTranslateCaptionEngine(
+                app,
+                targetLang = target,
+                onHeard = { heard -> lastHeard = heard },
+                onCaption = { text ->
+                    if (g == generation) {
+                        lastTranslated = text
+                        pushLine(text)
+                        Logger.i(LOG_TAG, "live: " + text.take(80))
+                    }
+                },
+                onState = { st ->
+                    if (g == generation) {
+                        state = st
+                        Logger.i(LOG_TAG, "state=" + st)
+                    }
+                },
+            ).also { it.start() }
+            Logger.i(LOG_TAG, "engine=live target=" + target)
+            return
+        }
+
         if (!twoWay && engineMode() == "chunk") {
             val g = gen
             chunk = ChunkCaptionEngine(
@@ -402,6 +434,8 @@ object Translator {
         duo = null
         duoStream?.stop()
         duoStream = null
+        live?.stop()
+        live = null
         appCtx?.let { AudioRouter.reset(it) }
         routing = "speaker"
         state = "idle"
