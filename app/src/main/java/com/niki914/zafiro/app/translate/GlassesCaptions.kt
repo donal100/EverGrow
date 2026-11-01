@@ -117,7 +117,7 @@ object GlassesCaptions {
     fun fontSize(ctx: Context): Float = runCatching {
         File(ctx.filesDir, "voice_tuning.txt").readLines()
             .firstOrNull { it.trim().startsWith("glasses_font=") }
-            ?.substringAfter("=")?.trim()?.toFloatOrNull()?.coerceIn(18f, 96f) ?: 40f
+            ?.substringAfter("=")?.trim()?.toFloatOrNull()?.coerceIn(8f, 120f) ?: 40f
     }.getOrDefault(40f)
 
 
