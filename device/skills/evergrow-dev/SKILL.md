@@ -154,3 +154,40 @@ installed package's. Equal → in-place update; different → Android refuses wi
 
 The composer's text field gets only the width left after the buttons, so a fourth button
 in the compact row squeezes it to zero. Keep it `attach | text | mic | send`.
+
+## The phone side lives in git: `device-config`
+
+Everything on the device that is not a secret is committed on the **`device-config`** branch
+under `device/`: `settings/tools/custom_py_tools.json` (all eleven tools), the six fork
+skills, agent settings and memory. A reinstall wipes `files/`; this branch is what brings it
+back. `main` is not used for this because every push there starts a 4-minute build.
+
+Restore after a wipe - one command, keys included:
+
+```python
+import requests
+ns = {}
+exec(requests.get("https://raw.githubusercontent.com/donal100/Evergrow/device-config/device/restore.py").text, ns)
+print(ns["restore"](passphrase="<passphrase>"))   # omit passphrase for config only
+```
+
+**Keep it current.** After any `py_meta_tools write`/`delete`, or any edit to a fork skill,
+push the changed file to `device/` on that branch - otherwise the next reinstall silently
+loses the tool. Read `device/README.md` for the file map; `device/RESTORE.md` for the
+recovery checklist.
+
+Credentials never go in there. They live only in `/sdcard/Download/evergrow-keys.enc`
+(`EVGR1`: magic, 16-byte salt, 12-byte nonce, AES-256-GCM, PBKDF2-HMAC-SHA256 120k) and are
+unlocked by `py_restore_keys` or by `restore.py` with the passphrase.
+
+## Credential and key map
+
+| purpose | file | note |
+|---|---|---|
+| LLM (DeepSeek) | `settings/llm/saved_configs.json` | survives reinstalls via Android backup; restore never overwrites a live key |
+| Qwen speech + ASR | `files/qwen_asr_key.txt` | the app reads this file name itself; `py_speak_qwen` and `py_voice_archive` use it |
+| Qwen (backup copies) | `tool_output/qwen/{token_plan,payg,asr}.token` | the `sk-sp-` token-plan key returns 401 on both dashscope hosts - do not rely on it |
+| SerpApi | `tool_output/serpapi/.token` | free plan, 250 searches/month |
+| OpenRouter | `tool_output/openrouter/.token` | |
+| GitHub | `tool_output/evergrow/.token` | fine-grained, this repo only |
+| Google Maps | `google_maps_key.txt` | legacy Geocode/Directions/Places are **disabled** on project 921460358621; only the new **Routes API** works, and Places API (New) is off too |
