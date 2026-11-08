@@ -192,6 +192,8 @@ def restore(passphrase="", dry_run=False):
                 data = json.dumps(new, indent=2).encode()
             except Exception:
                 pass
+        if rel in ("README.md", "RESTORE.md"):
+            continue  # repo-facing docs, not part of the app sandbox
         if not dry_run:
             _write(rel, data)
         lines.append(("would write " if dry_run else "wrote ") + rel)
