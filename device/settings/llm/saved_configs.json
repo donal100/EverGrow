@@ -1,0 +1,22 @@
+{
+  "active_id": "cfg-68f81f735f21",
+  "prompt": "",
+  "configs": [
+    {
+      "id": "cfg-68f81f735f21",
+      "name": "DeepSeek",
+      "provider": "deepseek",
+      "endpoint": "https://api.deepseek.com/responses",
+      "api_key": "",
+      "model": "deepseek-flash",
+      "protocol": "openai-responses",
+      "supports_images": true,
+      "proxy": "",
+      "thinking_level": "high",
+      "max_tokens": "",
+      "context_window_tokens": "",
+      "created_at": 1794115903373,
+      "updated_at": 1794115903373
+    }
+  ]
+}

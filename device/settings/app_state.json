@@ -1,0 +1,20 @@
+{
+  "onboarding_completed": true,
+  "language_tag": "",
+  "load_last_conversation_on_startup": true,
+  "theme_mode": "light",
+  "theme_seed_color": "FFFABD00",
+  "markdown_scale": 1.0,
+  "llm_idle_timeout_seconds": 60,
+  "llm_retry_max_attempts": 3,
+  "repetition_sensitivity": "loose",
+  "context_compaction_threshold_percent": 70,
+  "keep_screen_on": true,
+  "always_show_message_actions": true,
+  "floating_ball_enabled": false,
+  "resident_notification_enabled": false,
+  "turn_notification_enabled": false,
+  "floating_ball_auto_expand": true,
+  "voice_assistant_isolated_session": true,
+  "pinned_conversations": []
+}
