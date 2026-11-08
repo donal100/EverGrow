@@ -148,10 +148,12 @@ def _fetch():
     files = {}
     with tarfile.open(fileobj=io.BytesIO(r.content), mode="r:gz") as tf:
         for m in tf.getmembers():
-            if not m.isfile() or "/device/" not in m.name:
+            parts = m.name.split("/")
+            # tarball root is <repo>-<branch>/; accept only <root>/device/**
+            if not m.isfile() or len(parts) < 3 or parts[1] != "device":
                 continue
-            rel = m.name.split("/device/", 1)[1]
-            if rel in ("restore.py",) or rel.startswith("."):
+            rel = "/".join(parts[2:])
+            if rel == "restore.py" or rel.startswith(".") or rel.endswith("/"):
                 continue
             files[rel] = tf.extractfile(m).read()
     return files
