@@ -103,3 +103,21 @@ flag.**
   force-unmute watchdog. Half-duplex stays closed until playback drains. State writes
   need a generation guard against a late `onClosed(1000)`. `translateMode` must be
   `rememberSaveable` and forwarded to `LiquidChatComposer`.
+
+## Glasses captions (XREAL / Nreal)
+
+`app/translate/GlassesCaptions.kt` plus `CaptionActivity.kt`. Two paths: a `Presentation`
+on a secondary Display when the glasses are an *extended* display, otherwise a full-screen
+black `CaptionActivity` launched only when an output device named `xreal`/`nreal` is
+attached (mirror mode — black reads as transparent on the optics, white text survives).
+
+Every knob is live in `filesDir/voice_tuning.txt`, no rebuild:
+
+- `glasses_font=<sp>` — default 40, clamped 8–120. Read by `fontSize()` when the TextView
+  is constructed (Presentation init / Activity `onCreate`), so an edit applies on the next
+  attach: re-plug the glasses or restart the app.
+- `glasses_pos=top|center|bottom` (default `top`), `glasses_margin=<px>` (default 140).
+- Kill switches: `glasses_captions=0`, `glasses_overlay=0`.
+
+Line spacing is hard-coded `setLineSpacing(8f, 1f)` and does **not** scale with the font,
+so a much smaller font looks disproportionately airy — change both together if it matters.
