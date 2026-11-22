@@ -64,12 +64,17 @@ object AgentWakeLockController {
         anyAgentRunning: Boolean,
         mcpKeepScreenOn: Boolean,
         mcpRunning: Boolean,
+        translating: Boolean = false,
     ): Set<WakeDemand> = buildSet {
         if (agentKeepScreenOn && anyAgentRunning) {
             add(WakeDemand.AgentRunning)
         }
         if (mcpKeepScreenOn && mcpRunning) {
             add(WakeDemand.McpServing)
+        }
+        // 翻译不看 Agent 的常亮开关：字幕在黑屏上等于没有。
+        if (translating) {
+            add(WakeDemand.TranslatorRunning)
         }
     }
 
@@ -132,6 +137,10 @@ object AgentWakeLockController {
                     mcpRunning = mcpStatus is McpServiceStatus.Running,
                 )
             }
+                // combine 只有 2..5 个流的定型重载，第六个流单独接在后面。
+                .combine(com.niki914.zafiro.app.translate.Translator.runningFlow) { demands, translating ->
+                    if (translating) demands + WakeDemand.TranslatorRunning else demands
+                }
                 .distinctUntilChanged()
                 .collect { demands ->
                     val holdCpu = demands.isNotEmpty()

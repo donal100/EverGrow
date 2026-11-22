@@ -68,6 +68,20 @@ object Translator {
     /** 每次 startRealtime 递增；旧的 socket 回调据此丢弃，避免覆盖新会话状态。 */
     @Volatile private var generation = 0
 
+    /**
+     * 翻译是否在跑：给 [com.niki914.zafiro.app.wakelock.AgentWakeLockController] 用，
+     * 它据此把前台窗口设成常亮 —— 字幕在黑屏上等于没有。
+     */
+    private val _runningFlow = kotlinx.coroutines.flow.MutableStateFlow(false)
+    val runningFlow: kotlinx.coroutines.flow.StateFlow<Boolean> = _runningFlow
+
+    /** voice_tuning.txt 的 translate_screen_on=0 可以关掉常亮。 */
+    private fun screenOnWanted(ctx: Context): Boolean = runCatching {
+        File(ctx.filesDir, "voice_tuning.txt").readLines()
+            .firstOrNull { it.trim().startsWith("translate_screen_on=") }
+            ?.substringAfter("=")?.trim() != "0"
+    }.getOrDefault(true)
+
     @Volatile var state: String = "idle"
     @Volatile private var direction: String = "two-way"
     @Volatile private var routing: String = "speaker"
@@ -159,6 +173,7 @@ object Translator {
         val app = ctx.applicationContext
         appCtx = app
         direction = dir
+        _runningFlow.value = screenOnWanted(app)
         if (speaker == null) speaker = VoiceReplySpeaker(app)
         routing = if (dir == "two-way") "speaker" else AudioRouter.routeToEarphones(app)
         val asr = QwenAsrClient(File(app.filesDir, "qwen_asr_key.txt"))
@@ -185,6 +200,7 @@ object Translator {
         val app = ctx.applicationContext
         appCtx = app
         direction = mode
+        _runningFlow.value = screenOnWanted(app)
         // 双向走外放（两个人都要听见），单向走耳机
         val twoWay = mode == "two-way" || mode == "two-way-yue"
         routing = if (twoWay) "speaker" else AudioRouter.routeToEarphones(app)
@@ -447,6 +463,7 @@ object Translator {
         duoStream = null
         live?.stop()
         live = null
+        _runningFlow.value = false
         appCtx?.let { AudioRouter.reset(it) }
         routing = "speaker"
         state = "idle"

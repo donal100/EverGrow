@@ -23,6 +23,21 @@ class WakeDemandTest {
         assertFalse("MCP 调用不应强制屏幕常亮", demands.any { it.needsScreenOn })
     }
 
+    // 翻译在跑时必须屏幕常亮，而且不受 Agent 那个开关约束：字幕在黑屏上等于没有。
+    @Test
+    fun translatorRunningNeedsScreenOnEvenThoughItIsNotAnAgent() {
+        val demands = AgentWakeLockController.demandsOf(
+            agentKeepScreenOn = false,
+            anyAgentRunning = false,
+            mcpKeepScreenOn = false,
+            mcpRunning = false,
+            translating = true,
+        )
+
+        assertEquals(setOf(WakeDemand.TranslatorRunning), demands)
+        assertTrue("翻译在跑时屏幕必须常亮", demands.any { it.needsScreenOn })
+    }
+
     @Test
     fun agentRunningNeedsScreenOnAndNoDemandReleasesEverything() {
         val agentOnly = AgentWakeLockController.demandsOf(

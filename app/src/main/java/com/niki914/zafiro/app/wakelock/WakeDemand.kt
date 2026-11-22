@@ -12,8 +12,15 @@ enum class WakeDemand {
 
     /** Zafiro 作为 MCP 服务对外暴露且处于 Running，且 MCP 页常亮开关已开启。 */
     McpServing,
+
+    /**
+     * 实时翻译/字幕在跑。屏幕一黑，字幕就没人看得到 —— 所以这条需求要屏幕常亮，
+     * 且不看 Agent 的那个全局开关（它不是 Agent 会话）。
+     * voice_tuning.txt 的 translate_screen_on=0 可以关掉。
+     */
+    TranslatorRunning,
 }
 
 /** 该需求是否要求屏幕保持常亮。CPU 锁不在此列：任一需求存在即需要。 */
 val WakeDemand.needsScreenOn: Boolean
-    get() = this == WakeDemand.AgentRunning
+    get() = this == WakeDemand.AgentRunning || this == WakeDemand.TranslatorRunning
