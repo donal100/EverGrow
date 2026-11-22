@@ -35,6 +35,8 @@ class LiveTranslateCaptionEngine(
     private val targetLang: String,
     /** 「听见的是什么」——只写日志，不上屏（字幕必须是译文本身）。 */
     private val onHeard: (String) -> Unit = {},
+    /** 正在译的这一句（还没收尾）——先上屏，让人立刻看到有字。 */
+    private val onPartial: (String) -> Unit = {},
     private val onCaption: (String) -> Unit,
     private val onState: (String) -> Unit,
 ) {
@@ -46,8 +48,12 @@ class LiveTranslateCaptionEngine(
             "?model=qwen3.8-livetranslate-flash-realtime"
         /** 断句：默认 1000ms 太慢，这里 300ms —— 用户明确接受「碎一点、但要快」。 */
         const val SILENCE_MS = 300
-        /** 一句话的多段译文，攒这么久没有新字就上屏，避免一行字被拆成好几行。 */
-        const val FLUSH_MS = 600L
+        /**
+         * 一句话的多段译文，攒这么久没有新字就**提交**（写进历史行）。
+         * 600 → 200ms：实测旧值时每次字幕都白等 665ms（见 caption(Nms) 日志）。
+         * 只影响「提交」，不影响上屏 —— 上屏由 partial 直接推。
+         */
+        const val FLUSH_MS = 200L
     }
 
     private val http = OkHttpClient.Builder()
@@ -67,6 +73,27 @@ class LiveTranslateCaptionEngine(
     private var lastCaption = ""
     private var flushThread: Thread? = null
 
+    /** voice_tuning.txt 里的整数旋钮；读不到就用默认值。 */
+    private fun intCfg(key: String, def: Int, lo: Int, hi: Int): Int = runCatching {
+        File(ctx.filesDir, "voice_tuning.txt").readLines()
+            .firstOrNull { it.trim().startsWith(key + "=") }
+            ?.substringAfter("=")?.trim()?.toIntOrNull()?.coerceIn(lo, hi) ?: def
+    }.getOrDefault(def)
+
+    /** 没有新字多久算这句说完（提交）。 */
+    private val flushMs by lazy { intCfg("translate_flush_ms", FLUSH_MS.toInt(), 80, 2000) }
+    /** flusher 自己的轮询间隔，越短提交越准时。 */
+    private val flushPollMs by lazy { intCfg("translate_flush_poll_ms", 50, 20, 300) }
+    /** 半句上屏的最小间隔：眼镜光学件刷新太快会抖，10Hz 是实测能接受的。 */
+    private val partialMs by lazy { intCfg("translate_partial_ms", 100, 50, 1000) }
+    /** 每次送给模型的音频帧长（毫秒），越小越跟手。 */
+    private val frameMs by lazy { intCfg("translate_frame_ms", 20, 10, 100) }
+
+    /** 这一句第一段译文到手的时刻，用来自报「模型出字 → 上屏」的真实延迟。 */
+    @Volatile private var firstDeltaAt = 0L
+    @Volatile private var lastPartialAt = 0L
+    private var lastPartialSent = ""
+
     private val gain: Double by lazy {
         runCatching {
             File(ctx.filesDir, "voice_tuning.txt").readLines()
@@ -79,6 +106,7 @@ class LiveTranslateCaptionEngine(
         if (running) return
         running = true
         onState("connecting")
+        prefetchDns()
         open()
         startFlusher()
     }
@@ -94,6 +122,17 @@ class LiveTranslateCaptionEngine(
         record = null
         micThread = null
         onState("stopped")
+    }
+
+    /**
+     * 先把域名解析掉：实测冷启动 DNS 278ms、TLS 259ms，全都落在「第一条字幕之前」。
+     * 解析结果进系统缓存，后面的 WebSocket 握手就不用再等 DNS。
+     */
+    private fun prefetchDns() {
+        Thread {
+            runCatching { java.net.InetAddress.getAllByName("maas.qwencloudapi.com") }
+                .onFailure { Logger.w(TAG, "dns prefetch failed") }
+        }.apply { isDaemon = true; name = "caption-dns"; start() }
     }
 
     private fun open() {
@@ -159,7 +198,8 @@ class LiveTranslateCaptionEngine(
         runCatching { record?.stop() }
         runCatching { record?.release() }
         record = null
-        runCatching { Thread.sleep(800) }
+        // 800 → 200ms：断线时这段是纯静音，重连本身已经要一次握手。
+        runCatching { Thread.sleep(200) }
         if (running) { Logger.i(TAG, "reconnecting"); open() }
     }
 
@@ -174,6 +214,8 @@ class LiveTranslateCaptionEngine(
             "response.text.delta", "response.output_text.delta" -> {
                 buf.append(ev.optString("delta"))
                 lastDeltaAt = System.currentTimeMillis()
+                if (firstDeltaAt == 0L) firstDeltaAt = lastDeltaAt
+                maybeEmitPartial()
             }
             "response.text.done" -> {
                 // done 只是「这一段结束」，一句人话可能分好几段；交给 flusher 去合并。
@@ -197,11 +239,13 @@ class LiveTranslateCaptionEngine(
         if (flushThread != null) return
         flushThread = Thread {
             while (running) {
-                Thread.sleep(150)
+                try { Thread.sleep(flushPollMs.toLong()) } catch (_: InterruptedException) { break }
                 val now = System.currentTimeMillis()
-                if (buf.isEmpty() || now - lastDeltaAt < FLUSH_MS) continue
+                if (buf.isEmpty() || now - lastDeltaAt < flushMs) continue
                 val text = buf.toString().trim()
                 buf.setLength(0)
+                firstDeltaAt = 0L
+                lastPartialSent = ""
                 if (text.isEmpty()) continue
                 val line = trimOverlap(lastCaption, text)
                 if (line.isBlank()) continue
@@ -210,6 +254,24 @@ class LiveTranslateCaptionEngine(
                 runCatching { onCaption(line) }
             }
         }.also { it.isDaemon = true; it.start() }
+    }
+
+    /**
+     * 半句先上屏：模型在**人还在说话时**就吐译文（实测 speech_started 后 0.47s 开始出字），
+     * 旧的实现把这段字攥在 buf 里等静默，等于白扔半秒。
+     * 这里按 partialMs 节流推上去；提交时仍以 trimOverlap 之后的结果为准。
+     */
+    private fun maybeEmitPartial() {
+        val now = System.currentTimeMillis()
+        if (now - lastPartialAt < partialMs) return
+        val raw = buf.toString().trim()
+        if (raw.isEmpty()) return
+        val line = trimOverlap(lastCaption, raw)
+        if (line.isBlank() || line == lastPartialSent) return
+        lastPartialAt = now
+        lastPartialSent = line
+        Logger.i(TAG, "partial(+" + (now - firstDeltaAt) + "ms) " + line.take(60))
+        runCatching { onPartial(line) }
     }
 
     /** 上一段结尾和这一段开头重叠时切掉重复部分（实时译文常把半句重说一遍）。 */
@@ -248,8 +310,10 @@ class LiveTranslateCaptionEngine(
         runCatching { rec.startRecording() }
         Logger.i(TAG, "mic " + (rec.routedDevice?.productName ?: "?"))
         micThread = Thread {
-            val pcm = ShortArray(1600)              // 100ms
-            val bytes = ByteArray(1600 * 2)
+            // 100ms 一帧 → 默认 20ms：送得越碎，服务端 VAD 和模型看到的越及时。
+            val frame = (RATE * frameMs / 1000).coerceAtLeast(160)
+            val pcm = ShortArray(frame)
+            val bytes = ByteArray(frame * 2)
             while (running && ready && record === rec) {
                 val n = runCatching { rec.read(pcm, 0, pcm.size) }.getOrDefault(-1)
                 if (n <= 0) continue

@@ -15,6 +15,20 @@ import com.niki914.logging.Logger
 import java.io.File
 
 /**
+ * 字幕往哪儿推。以前外接屏和镜像页各自每 250ms 轮询 Translator.linesVersion，
+ * 于是每句字幕最多晚 250ms 才出现 —— 现在由 Translator 直接推过来。
+ */
+object CaptionRender {
+    @Volatile
+    var sink: ((String) -> Unit)? = null
+
+    fun emit(text: String) {
+        if (text.isEmpty()) return
+        runCatching { sink?.invoke(text) }
+    }
+}
+
+/**
  * 把字幕投到外接显示器（XREAL 之类的 USB-C 眼镜）上：整块屏只有黑底白字。
  *
  * 为什么不用投屏：镜像会把整个手机界面搬上去 —— 状态栏、按钮、通知，
@@ -149,6 +163,7 @@ object GlassesCaptions {
     }.getOrDefault(140)
 
     fun detach() {
+        CaptionRender.sink = null
         runCatching { listener?.let { dm?.unregisterDisplayListener(it) } }
         listener = null
         dm = null
@@ -199,6 +214,7 @@ object GlassesCaptions {
             p.show()
             presentation = p
             p.render(Translator.snapshotLines())
+            CaptionRender.sink = { line -> main.post { presentation?.renderText(line) } }
             Logger.i(TAG, "showing on display=" + target.displayId + " " + target.name)
         }.onFailure { e ->
             Logger.w(
@@ -237,6 +253,11 @@ object GlassesCaptions {
 
         fun render(lines: List<String>) {
             runCatching { text.text = lines.lastOrNull().orEmpty() }
+        }
+
+        /** 单行直接替换：半句和整句都走这里，屏幕永远只有一行，不会滚。 */
+        fun renderText(line: String) {
+            runCatching { text.text = line }
         }
     }
 }

@@ -41,6 +41,10 @@ object Translator {
         .readTimeout(90, TimeUnit.SECONDS)
         .build()
     private val JSON = "application/json".toMediaType()
+    /** 字幕落盘单独一线程：磁盘慢一下不该算进字幕延迟。 */
+    private val subsIo = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+        Thread(r, "caption-subs").apply { isDaemon = true }
+    }
 
     private const val LOG_TAG = "niki914_zafiro_Translator"
     private const val BASE = "https://maas.qwencloudapi.com"
@@ -130,13 +134,17 @@ object Translator {
             while (lines.size > 400) lines.removeAt(0)
             linesVersion++
         }
+        // 直接推给正在显示的那块屏：省掉 250ms 轮询。
+        runCatching { CaptionRender.emit(text) }
         // 字幕同时落盘：屏幕上出现过什么，事后能和录音逐句对照。
-        runCatching {
-            val app = appCtx ?: return@runCatching
-            val dir = File(app.filesDir, "translate_subs").apply { mkdirs() }
-            val day = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
-            val stamp = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(java.util.Date())
-            File(dir, day + ".txt").appendText(stamp + "\t" + text.replace("\n", " ") + "\n")
+        subsIo.execute {
+            runCatching {
+                val app = appCtx ?: return@runCatching
+                val dir = File(app.filesDir, "translate_subs").apply { mkdirs() }
+                val day = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
+                val stamp = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(java.util.Date())
+                File(dir, day + ".txt").appendText(stamp + "\t" + text.replace("\n", " ") + "\n")
+            }
         }
     }
 
@@ -316,6 +324,9 @@ object Translator {
                 app,
                 targetLang = target,
                 onHeard = { heard -> lastHeard = heard },
+                onPartial = { partial ->
+                    if (g == generation) runCatching { CaptionRender.emit(partial) }
+                },
                 onCaption = { text ->
                     if (g == generation) {
                         lastTranslated = text

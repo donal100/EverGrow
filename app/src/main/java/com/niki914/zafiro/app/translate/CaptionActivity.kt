@@ -55,6 +55,8 @@ class CaptionActivity : Activity() {
         box.gravity = GlassesCaptions.gravity(this)
         box.addView(text)
         setContentView(box)
+        // 推送式上屏，别等 250ms 的轮询。
+        CaptionRender.sink = { line -> main.post { render(listOf(line)) } }
         Logger.i(TAG, "caption activity shown")
         main.post(ticker)
     }
@@ -80,6 +82,7 @@ class CaptionActivity : Activity() {
     }
 
     override fun onDestroy() {
+        CaptionRender.sink = null
         main.removeCallbacks(ticker)
         Logger.i(TAG, "caption activity closed")
         super.onDestroy()
