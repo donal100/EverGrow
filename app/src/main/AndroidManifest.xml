@@ -224,5 +224,20 @@
                 android:resource="@xml/accessibility_service_config" />
         </service>
 
+
+        <!-- 棋盘小组件：agent 把引擎连线写进 filesDir/chess/line.json，
+             这里按 RemoteViews 画出来，点一下走一步。 -->
+        <receiver
+            android:name=".chess.ChessWidgetProvider"
+            android:exported="false"
+            android:label="Chess">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/chess_widget_info" />
+        </receiver>
+
 </application>
 </manifest>

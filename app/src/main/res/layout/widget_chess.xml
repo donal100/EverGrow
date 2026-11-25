@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@drawable/widget_chess_bg"
+    android:padding="10dp">
+
+    <TextView
+        android:id="@+id/chess_label"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:maxLines="1"
+        android:ellipsize="end"
+        android:textColor="#ECEAE6"
+        android:textSize="12sp"
+        android:paddingBottom="6dp"
+        android:text="Chess" />
+
+    <ImageView
+        android:id="@+id/chess_board"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:adjustViewBounds="true"
+        android:scaleType="fitCenter"
+        android:contentDescription="Chess board" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingTop="6dp">
+
+        <TextView
+            android:id="@+id/chess_prev"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:paddingLeft="18dp"
+            android:paddingRight="18dp"
+            android:paddingTop="6dp"
+            android:paddingBottom="6dp"
+            android:textColor="#ECEAE6"
+            android:textSize="16sp"
+            android:text="◀" />
+
+        <TextView
+            android:id="@+id/chess_eval"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:textColor="#9FD08A"
+            android:textSize="14sp"
+            android:text="—" />
+
+        <TextView
+            android:id="@+id/chess_next"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:paddingLeft="18dp"
+            android:paddingRight="18dp"
+            android:paddingTop="6dp"
+            android:paddingBottom="6dp"
+            android:textColor="#ECEAE6"
+            android:textSize="16sp"
+            android:text="▶" />
+
+        <TextView
+            android:id="@+id/chess_reset"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:paddingLeft="12dp"
+            android:paddingRight="10dp"
+            android:paddingTop="6dp"
+            android:paddingBottom="6dp"
+            android:textColor="#8A8782"
+            android:textSize="15sp"
+            android:text="↺" />
+    </LinearLayout>
+</LinearLayout>
