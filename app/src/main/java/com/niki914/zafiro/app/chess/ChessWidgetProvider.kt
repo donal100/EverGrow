@@ -69,10 +69,11 @@ class ChessWidgetProvider : AppWidgetProvider() {
             views.setOnClickPendingIntent(R.id.chess_prev, pending(context, ACTION_PREV, 2))
             views.setOnClickPendingIntent(R.id.chess_reset, pending(context, ACTION_RESET, 3))
             views.setOnClickPendingIntent(R.id.chess_board, pending(context, ACTION_NEXT, 1))
+            views.setOnClickPendingIntent(R.id.chess_label, picker(context))
 
             if (data == null) {
                 views.setImageViewBitmap(R.id.chess_board, boardBitmap(emptyBoard(), true, null, null))
-                views.setTextViewText(R.id.chess_label, "Chess · no line yet")
+                views.setTextViewText(R.id.chess_label, "Tap here to pick a game")
                 views.setTextViewText(R.id.chess_eval, "—")
                 mgr.updateAppWidget(id, views)
                 return
@@ -125,6 +126,21 @@ class ChessWidgetProvider : AppWidgetProvider() {
         const val ACTION_RESET = "com.niki914.zafiro.app.chess.RESET"
         private const val PREFS = "chess_widget"
         private const val KEY_PREFIX = "index_"
+
+        /** Reset every placed widget to ply 0 and repaint from the current line.json. */
+        fun refresh(ctx: Context) {
+            val mgr = AppWidgetManager.getInstance(ctx)
+            val ids = mgr.getAppWidgetIds(ComponentName(ctx, ChessWidgetProvider::class.java))
+            val prefs = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            for (id in ids) prefs.edit().putInt(KEY_PREFIX + id, 0).apply()
+            if (ids.isNotEmpty()) ChessWidgetProvider().onUpdate(ctx, mgr, ids)
+        }
+
+        /** Title tap → the game picker (analysis happens there, not in the widget). */
+        private fun picker(context: Context): PendingIntent = PendingIntent.getActivity(
+            context, 9, Intent(context, ChessPickerActivity::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
 
         private fun emptyBoard(): CharArray = CharArray(64) { ' ' }
 

@@ -227,6 +227,14 @@
 
         <!-- 棋盘小组件：agent 把引擎连线写进 filesDir/chess/line.json，
              这里按 RemoteViews 画出来，点一下走一步。 -->
+        <!-- 选择要分析的对局：只列「轮到你走」的每日棋局，点一下就跑分析并刷新小组件。 -->
+        <activity
+            android:name=".chess.ChessPickerActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:label="Chess"
+            android:theme="@android:style/Theme.Material.Dialog.NoActionBar" />
+
         <receiver
             android:name=".chess.ChessWidgetProvider"
             android:exported="false"
