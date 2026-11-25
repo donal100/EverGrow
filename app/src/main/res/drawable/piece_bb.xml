@@ -1,5 +1,5 @@
-<!-- lichess "staunty" piece set by sadsnake1, CC BY-NC-SA 4.0; converted from SVG to vector drawable. -->
 <?xml version="1.0" encoding="utf-8"?>
+<!-- lichess "staunty" piece set by sadsnake1, CC BY-NC-SA 4.0; converted from SVG to a vector drawable. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="45dp" android:height="45dp"
     android:viewportWidth="50" android:viewportHeight="50">
