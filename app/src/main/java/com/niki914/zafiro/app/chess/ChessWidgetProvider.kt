@@ -136,9 +136,18 @@ class ChessWidgetProvider : AppWidgetProvider() {
             if (ids.isNotEmpty()) ChessWidgetProvider().onUpdate(ctx, mgr, ids)
         }
 
-        /** Title tap → the game picker (analysis happens there, not in the widget). */
+        /**
+         * Title tap → the game picker (analysis happens there, not in the widget).
+         *
+         * Its own task (empty affinity in the manifest + NEW_TASK/CLEAR_TASK here) so that
+         * dismissing it returns to the home screen instead of dragging the app's UI up
+         * behind it.
+         */
         private fun picker(context: Context): PendingIntent = PendingIntent.getActivity(
-            context, 9, Intent(context, ChessPickerActivity::class.java),
+            context, 9,
+            Intent(context, ChessPickerActivity::class.java).addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+            ),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
