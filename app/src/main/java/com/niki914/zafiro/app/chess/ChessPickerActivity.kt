@@ -41,6 +41,9 @@ class ChessPickerActivity : Activity() {
     private var status: TextView? = null
     private var simMe = "white"
 
+    /** Stateless simulation: the position travels with every call. */
+    private var simFen = ""
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         root = LinearLayout(this).apply {
@@ -115,6 +118,9 @@ class ChessPickerActivity : Activity() {
 
     private fun fmtOdds(v: Double): String =
         if (v.isNaN()) "\u2014" else v.roundToInt().toString() + "%"
+
+    private fun fmtLoss(v: Double): String =
+        if (v.isNaN()) "" else " (" + String.format("%.1f", v) + "% lost)"
 
     // --------------------------------------------------------------- games --
 
@@ -231,6 +237,7 @@ class ChessPickerActivity : Activity() {
     private fun showSim(state: JSONObject, game: Game) {
         clear()
         simMe = state.optString("me", "white")
+        simFen = state.optString("fen")
         val flip = simMe == "black"
 
         val bv = ChessBoardView(this).apply {
@@ -272,19 +279,21 @@ class ChessPickerActivity : Activity() {
         bv.enabledTaps = false
         setStatus("Checking " + from + "\u2192" + to + "\u2026")
         Thread {
-            val outcome = runCatching { py("chess_pick.sim_move('$from','$to')") }
+            val outcome = runCatching { py("chess_pick.sim_move('" + simFen + "','" + from + "','" + to + "','" + simMe + "')") }
             ui.post {
                 busy = false
                 bv.enabledTaps = true
                 val r = outcome.getOrNull()
                 if (r == null || !r.optBoolean("ok")) {
-                    bv.board = bv.board
+                    bv.board = BoardPainter.parseFen(simFen)
                     setStatus("Not played: " + (r?.optString("error") ?: outcome.exceptionOrNull()?.message ?: "?"))
                     return@post
                 }
                 val replyUci = r.optString("reply_uci")
-                bv.board = BoardPainter.parseFen(r.optString("reply_fen", r.optString("fen")))
-                bv.turn = simMe
+                val nextFen = r.optString("reply_fen", r.optString("fen"))
+                if (nextFen.isNotBlank()) simFen = nextFen
+                bv.board = BoardPainter.parseFen(simFen)
+                bv.turn = r.optString("turn", simMe)
                 if (replyUci.length >= 4) {
                     bv.from = BoardPainter.sq(replyUci.substring(0, 2))
                     bv.to = BoardPainter.sq(replyUci.substring(2, 4))
@@ -296,9 +305,9 @@ class ChessPickerActivity : Activity() {
                 val tail = if (r.optBoolean("checkmate")) " \u00b7 checkmate"
                 else if (r.optBoolean("stalemate")) " \u00b7 stalemate"
                 else if (reply.isNotEmpty()) " \u00b7 engine: " + reply
-                else ""
+                else " \u00b7 no engine reply, both sides are yours"
                 setStatus(
-                    san + mark + " \u00b7 " + labelText + " (" + r.optDouble("loss_pct", 0.0) + "% lost) \u00b7 " +
+                    san + mark + " \u00b7 " + labelText + fmtLoss(r.optDouble("loss_pct", Double.NaN)) + " \u00b7 " +
                             fmtOdds(r.optDouble("odds_before", Double.NaN)) + " \u2192 " +
                             fmtOdds(r.optDouble("odds_after", Double.NaN)) + tail
                 )
@@ -333,8 +342,27 @@ class ChessPickerActivity : Activity() {
         }.start()
     }
 
-    /** Runs a chess_pick expression in the :python worker and returns its JSON. */
+    /** Retries once: the :python worker can be mid-restart when a tap lands. */
     private fun py(expr: String): JSONObject {
+        var last: Throwable? = null
+        for (attempt in 0 until 2) {
+            try {
+                return pyOnce(expr)
+            } catch (t: Throwable) {
+                last = t
+                if (attempt == 0) {
+                    try {
+                        Thread.sleep(700)
+                        runBlocking { PyRuntime.warmUp() }
+                    } catch (_: Throwable) {
+                    }
+                }
+            }
+        }
+        throw last ?: IllegalStateException("python failed")
+    }
+
+    private fun pyOnce(expr: String): JSONObject {
         val work = File(filesDir, "work").absolutePath
         val pylibs = File(filesDir, "pylibs").absolutePath
         val code = buildString {
