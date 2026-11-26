@@ -72,7 +72,13 @@ class ChessPickerActivity : Activity() {
         }
         setContentView(root)
         buildSkeleton()
-        reloadGames()
+        if (restoreState()) {
+            headerTitle.text = headerForIndex()
+            if (simFen.isNotBlank()) showBoard()
+            refreshGamesQuietly()
+        } else {
+            reloadGames()
+        }
     }
 
     // ------------------------------------------------------------------ ui --
@@ -121,6 +127,11 @@ class ChessPickerActivity : Activity() {
         root.addView(bar2)
     }
 
+    override fun onPause() {
+        super.onPause()
+        saveState()
+    }
+
     private fun label(text: String, size: Float, color: String): TextView =
         TextView(this).apply {
             this.text = text
@@ -152,6 +163,85 @@ class ChessPickerActivity : Activity() {
 
     private fun turnOf(fen: String): String =
         if ((fen.split(" ").getOrNull(1) ?: "w") == "w") "white" else "black"
+
+    // ---------------------------------------------------------- persistence --
+
+    private val stateFile: File get() = File(File(filesDir, "chess"), "picker_state.json")
+
+    /** Everything needed to come back exactly where the user left off. */
+    private fun saveState() {
+        try {
+            val o = JSONObject()
+            o.put("index", index)
+            o.put("simMe", simMe)
+            o.put("fen", simFen)
+            o.put("status", statusView.text.toString())
+            o.put("coach", coachView.text.toString())
+            val arr = org.json.JSONArray()
+            for (g in games) arr.put(JSONObject().apply {
+                put("id", g.id)
+                put("opponent", g.opponent)
+                put("colour", g.colour)
+                put("plies", g.plies)
+                put("last", g.last)
+            })
+            o.put("games", arr)
+            val simsObj = JSONObject()
+            for ((id, st) in sims) simsObj.put(id, JSONObject().apply {
+                put("fen", st.fen)
+                val h = org.json.JSONArray()
+                for (f in st.history) h.put(f)
+                put("history", h)
+            })
+            o.put("sims", simsObj)
+            stateFile.parentFile?.mkdirs()
+            stateFile.writeText(o.toString())
+        } catch (_: Throwable) {
+        }
+    }
+
+    private fun restoreState(): Boolean {
+        return try {
+            val f = stateFile
+            if (!f.exists()) return false
+            val o = JSONObject(f.readText())
+            val arr = o.optJSONArray("games") ?: return false
+            val list = ArrayList<Game>()
+            for (i in 0 until arr.length()) {
+                val g = arr.optJSONObject(i) ?: continue
+                list.add(
+                    Game(
+                        g.optString("id"), g.optString("opponent"), g.optString("colour"),
+                        g.optInt("plies"), g.optString("last")
+                    )
+                )
+            }
+            if (list.isEmpty()) return false
+            games = list
+            index = o.optInt("index", 0).coerceIn(0, games.size - 1)
+            simMe = o.optString("simMe", games[index].colour)
+            simFen = o.optString("fen", "")
+            val simsObj = o.optJSONObject("sims") ?: JSONObject()
+            sims.clear()
+            for (id in simsObj.keys()) {
+                val s = simsObj.optJSONObject(id) ?: continue
+                val hist = ArrayList<String>()
+                val h = s.optJSONArray("history")
+                if (h != null) for (i in 0 until h.length()) hist.add(h.optString(i))
+                sims[id] = SimState(s.optString("fen"), hist)
+            }
+            statusView.text = o.optString("status", "")
+            coachView.text = o.optString("coach", "")
+            true
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    private fun headerForIndex(): String {
+        val g = games.getOrNull(index) ?: return "No games"
+        return "vs " + g.opponent + " \u00b7 " + g.colour + " \u00b7 " + (index + 1) + "/" + games.size
+    }
 
     // --------------------------------------------------------------- games --
 
@@ -186,11 +276,32 @@ class ChessPickerActivity : Activity() {
         }.start()
     }
 
+    /** Refetches the game list without touching the simulation in progress. */
+    private fun refreshGamesQuietly() {
+        Thread {
+            val loaded: List<Game>? = try {
+                idsToMove().mapNotNull { id -> runCatching { details(id) }.getOrNull() }
+            } catch (t: Throwable) {
+                null
+            }
+            if (loaded == null || loaded.isEmpty()) return@Thread
+            ui.post {
+                val current = games.getOrNull(index)
+                games = loaded
+                val same = games.indexOfFirst { it.id == current?.id }
+                index = if (same >= 0) same else 0
+                headerTitle.text = headerForIndex()
+                saveState()
+            }
+        }.start()
+    }
+
     private fun switchGame(delta: Int) {
         if (games.isEmpty()) return
         index = (index + delta + games.size) % games.size
         showingList = false
         openSim(games[index])
+        saveState()
     }
 
     private fun toggleList() {
@@ -290,7 +401,8 @@ class ChessPickerActivity : Activity() {
             simMe = game.colour
             simFen = cached.fen
             showBoard()
-            setStatus("Your move \u00b7 " + fmtOdds(oddsFromBoard()) + " \u00b7 simulation only")
+            setStatus("Your move \u00b7 simulation only \u00b7 " + headerForIndex())
+            saveState()
             return
         }
 
@@ -312,6 +424,7 @@ class ChessPickerActivity : Activity() {
                 showBoard()
                 setStatus("Your move \u00b7 " + fmtOdds(st.optDouble("odds", Double.NaN)) +
                         " odds \u00b7 best " + st.optString("best"))
+                saveState()
             }
         }.start()
     }
@@ -403,6 +516,7 @@ class ChessPickerActivity : Activity() {
                     put("side", simMe)
                     put("mover", "you")
                 }
+                saveState()
             }
         }.start()
     }
@@ -466,6 +580,7 @@ class ChessPickerActivity : Activity() {
                     put("side", simMe)
                     put("mover", "engine")
                 }
+                saveState()
             }
         }.start()
     }
@@ -485,6 +600,7 @@ class ChessPickerActivity : Activity() {
         lastPayload = null
         showBoard()
         setStatus(if (turnOf(simFen) == simMe) "Back \u00b7 your move" else "Back \u00b7 engine to move \u00b7 tap Next")
+        saveState()
     }
 
     // --------------------------------------------------------------- coach --
