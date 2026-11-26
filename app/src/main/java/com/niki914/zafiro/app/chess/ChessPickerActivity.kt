@@ -313,7 +313,6 @@ class ChessPickerActivity : Activity() {
                             fmtOdds(r.optDouble("odds_after", Double.NaN)) + tail
                 )
                 if (over) bv.enabledTaps = false
-                )
             }
         }.start()
     }
