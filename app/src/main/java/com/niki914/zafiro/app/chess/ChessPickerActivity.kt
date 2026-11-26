@@ -44,6 +44,9 @@ class ChessPickerActivity : Activity() {
     /** Stateless simulation: the position travels with every call. */
     private var simFen = ""
 
+    /** Positions the simulation passed through, so Back can walk them. */
+    private val simHistory = ArrayList<String>()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         root = LinearLayout(this).apply {
@@ -236,6 +239,7 @@ class ChessPickerActivity : Activity() {
 
     private fun showSim(state: JSONObject, game: Game) {
         clear()
+        simHistory.clear()
         simMe = state.optString("me", "white")
         simFen = state.optString("fen")
         val flip = simMe == "black"
@@ -276,11 +280,21 @@ class ChessPickerActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
+        bar.addView(button("\u25c0 Back") { backMove() })
         bar.addView(button("\u25b6 Next") { nextReply() })
-        bar.addView(button("\u21bb Widget") { analyseForWidget(game) })
-        bar.addView(button("\u21ba Reset") { openSim(game) })
-        bar.addView(button("\u2715 Close") { finish() })
         root.addView(bar)
+
+        val bar2 = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        bar2.addView(button("\u21bb Widget") { analyseForWidget(game) })
+        bar2.addView(button("\u21ba Reset") {
+            simHistory.clear()
+            openSim(game)
+        })
+        bar2.addView(button("\u2715 Close") { finish() })
+        root.addView(bar2)
     }
 
     private fun playMove(from: String, to: String, bv: ChessBoardView) {
@@ -300,7 +314,10 @@ class ChessPickerActivity : Activity() {
                     return@post
                 }
                 val nextFen = r.optString("fen", r.optString("reply_fen"))
-                if (nextFen.isNotBlank()) simFen = nextFen
+                if (nextFen.isNotBlank() && nextFen != simFen) {
+                    simHistory.add(simFen)
+                    simFen = nextFen
+                }
                 bv.board = BoardPainter.parseFen(simFen)
                 bv.turn = r.optString("turn", simMe)
                 bv.from = BoardPainter.sq(from)
@@ -348,7 +365,10 @@ class ChessPickerActivity : Activity() {
                     return@post
                 }
                 val nextFen = r.optString("fen")
-                if (nextFen.isNotBlank()) simFen = nextFen
+                if (nextFen.isNotBlank() && nextFen != simFen) {
+                    simHistory.add(simFen)
+                    simFen = nextFen
+                }
                 bv.board = BoardPainter.parseFen(simFen)
                 bv.turn = r.optString("turn", simMe)
                 val uci = r.optString("uci")
@@ -369,6 +389,24 @@ class ChessPickerActivity : Activity() {
                 setStatus(who + " \u00b7 " + fmtOdds(r.optDouble("odds", Double.NaN)) + " odds" + tail)
             }
         }.start()
+    }
+
+    /** Undo one step of the simulation. */
+    private fun backMove() {
+        val bv = boardView ?: return
+        if (busy) return
+        if (simHistory.isEmpty()) {
+            setStatus("Nothing to undo")
+            return
+        }
+        simFen = simHistory.removeAt(simHistory.size - 1)
+        bv.board = BoardPainter.parseFen(simFen)
+        bv.from = null
+        bv.to = null
+        val turnField = simFen.split(" ").getOrNull(1) ?: "w"
+        bv.turn = if (turnField == "w") "white" else "black"
+        bv.enabledTaps = bv.turn == simMe
+        setStatus(if (bv.enabledTaps) "Back \u00b7 your move" else "Back \u00b7 engine to move \u00b7 tap Next")
     }
 
     // -------------------------------------------------------------- widget --
