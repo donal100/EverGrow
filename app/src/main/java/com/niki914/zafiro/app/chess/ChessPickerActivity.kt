@@ -359,9 +359,6 @@ class ChessPickerActivity : Activity() {
                     put("odds_after", r.optDouble("odds_after", Double.NaN))
                     put("side", simMe)
                 }
-                if (labelText == "inaccuracy" || labelText == "mistake" || labelText == "blunder") {
-                    explainCurrent()
-                }
             }
         }.start()
     }
