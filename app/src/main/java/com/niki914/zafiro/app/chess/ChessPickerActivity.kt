@@ -39,6 +39,9 @@ class ChessPickerActivity : Activity() {
 
     private var boardView: ChessBoardView? = null
     private var status: TextView? = null
+    private var explainView: TextView? = null
+    private var lastPayload: org.json.JSONObject? = null
+    private var explainBusy = false
     private var simMe = "white"
 
     /** Stateless simulation: the position travels with every call. */
@@ -271,6 +274,8 @@ class ChessPickerActivity : Activity() {
 
         status = label("", 13f, "#ECEAE6")
         root.addView(status)
+        explainView = label("", 13f, "#BFD3A6")
+        root.addView(explainView)
         setStatus(
             "Your move \u00b7 " + fmtOdds(state.optDouble("odds", Double.NaN)) + " odds \u00b7 best " +
                     state.optString("best") + " \u00b7 simulation only, nothing is played on chess.com"
@@ -288,6 +293,7 @@ class ChessPickerActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
+        bar2.addView(button("\ud83e\udd16 Why") { explainCurrent() })
         bar2.addView(button("\u21bb Widget") { analyseForWidget(game) })
         bar2.addView(button("\u21ba Reset") {
             simHistory.clear()
@@ -301,6 +307,7 @@ class ChessPickerActivity : Activity() {
         if (busy) return
         busy = true
         bv.enabledTaps = false
+        explainView?.text = ""
         setStatus("Checking " + from + "\u2192" + to + "\u2026")
         Thread {
             val outcome = runCatching { py("chess_pick.sim_move('" + simFen + "','" + from + "','" + to + "','" + simMe + "')") }
@@ -339,6 +346,20 @@ class ChessPickerActivity : Activity() {
                             fmtOdds(r.optDouble("odds_after", Double.NaN)) + tail
                 )
                 if (over) bv.enabledTaps = false
+                lastPayload = org.json.JSONObject().apply {
+                    put("fen_before", fenArg)
+                    put("move", san)
+                    put("best", r.optString("best_san", r.optString("best")))
+                    put("label", labelText)
+                    put("mark", mark)
+                    if (!lossPct.isNaN()) put("loss_pct", lossPct)
+                    put("odds_before", r.optDouble("odds_before", Double.NaN))
+                    put("odds_after", r.optDouble("odds_after", Double.NaN))
+                    put("side", simMe)
+                }
+                if (labelText == "inaccuracy" || labelText == "mistake" || labelText == "blunder") {
+                    explainCurrent()
+                }
             }
         }.start()
     }
@@ -407,6 +428,33 @@ class ChessPickerActivity : Activity() {
         bv.turn = if (turnField == "w") "white" else "black"
         bv.enabledTaps = bv.turn == simMe
         setStatus(if (bv.enabledTaps) "Back \u00b7 your move" else "Back \u00b7 engine to move \u00b7 tap Next")
+    }
+
+    /** Asks the coach model why the engine rated the last move that way. */
+    private fun explainCurrent() {
+        val payload = lastPayload
+        if (payload == null) {
+            setStatus("Make a move first")
+            return
+        }
+        if (explainBusy) return
+        explainBusy = true
+        explainView?.text = "coach thinking\u2026"
+        val b64 = android.util.Base64.encodeToString(
+            payload.toString().toByteArray(), android.util.Base64.NO_WRAP
+        )
+        Thread {
+            val outcome = runCatching { py("chess_pick.explain('" + b64 + "')") }
+            ui.post {
+                explainBusy = false
+                val r = outcome.getOrNull()
+                explainView?.text = if (r == null || !r.optBoolean("ok")) {
+                    "coach: " + (r?.optString("error") ?: outcome.exceptionOrNull()?.message ?: "?")
+                } else {
+                    "coach (" + r.optString("model") + "): " + r.optString("text")
+                }
+            }
+        }.start()
     }
 
     // -------------------------------------------------------------- widget --
