@@ -248,13 +248,22 @@ class ChessPickerActivity : Activity() {
         }
         boardView = bv
 
-        val side = min(
-            resources.displayMetrics.widthPixels - dp(28),
-            (resources.displayMetrics.heightPixels * 0.56f).toInt(),
-        )
-        root.addView(bv, LinearLayout.LayoutParams(side, side).apply {
-            gravity = Gravity.CENTER_HORIZONTAL
-        })
+        root.setPadding(dp(6), dp(6), dp(6), dp(4))
+        root.addView(bv, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+        ).apply { gravity = Gravity.CENTER_HORIZONTAL })
+        // square it off from the real content width, so it can never overflow the dialog
+        bv.post {
+            val w = bv.width
+            if (w > 0) {
+                val side = min(w, (resources.displayMetrics.heightPixels * 0.62f).toInt())
+                bv.layoutParams = LinearLayout.LayoutParams(side, side).apply {
+                    gravity = Gravity.CENTER_HORIZONTAL
+                }
+                bv.requestLayout()
+            }
+        }
 
         status = label("", 13f, "#ECEAE6")
         root.addView(status)
@@ -329,7 +338,7 @@ class ChessPickerActivity : Activity() {
         bv.enabledTaps = false
         setStatus("Engine thinking\u2026")
         Thread {
-            val outcome = runCatching { py("chess_pick.sim_reply('" + simFen + "','" + simMe + "')") }
+            val outcome = runCatching { py("chess_pick.sim_play('" + simFen + "','" + simMe + "')") }
             ui.post {
                 busy = false
                 val r = outcome.getOrNull()
@@ -348,14 +357,16 @@ class ChessPickerActivity : Activity() {
                     bv.to = BoardPainter.sq(uci.substring(2, 4))
                 }
                 val over = r.optBoolean("checkmate") || r.optBoolean("stalemate")
-                bv.enabledTaps = !over
+                // taps come back only when the move left it to the user
+                bv.enabledTaps = !over && r.optString("turn") == simMe
                 val tail = when {
                     r.optBoolean("checkmate") -> " \u00b7 checkmate"
                     r.optBoolean("stalemate") -> " \u00b7 stalemate"
                     else -> ""
                 }
-                setStatus("engine: " + r.optString("san") + " \u00b7 " +
-                        fmtOdds(r.optDouble("odds", Double.NaN)) + " odds" + tail)
+                val who = if (r.optBoolean("mine")) "engine played " + r.optString("san") + " for you"
+                else "engine: " + r.optString("san")
+                setStatus(who + " \u00b7 " + fmtOdds(r.optDouble("odds", Double.NaN)) + " odds" + tail)
             }
         }.start()
     }
