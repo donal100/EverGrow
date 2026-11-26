@@ -267,6 +267,7 @@ class ChessPickerActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
+        bar.addView(button("\u25b6 Next") { nextReply() })
         bar.addView(button("\u21bb Widget") { analyseForWidget(game) })
         bar.addView(button("\u21ba Reset") { openSim(game) })
         bar.addView(button("\u2715 Close") { finish() })
@@ -289,28 +290,73 @@ class ChessPickerActivity : Activity() {
                     setStatus("Not played: " + (r?.optString("error") ?: outcome.exceptionOrNull()?.message ?: "?"))
                     return@post
                 }
-                val replyUci = r.optString("reply_uci")
-                val nextFen = r.optString("reply_fen", r.optString("fen"))
+                val nextFen = r.optString("fen", r.optString("reply_fen"))
                 if (nextFen.isNotBlank()) simFen = nextFen
                 bv.board = BoardPainter.parseFen(simFen)
                 bv.turn = r.optString("turn", simMe)
-                if (replyUci.length >= 4) {
-                    bv.from = BoardPainter.sq(replyUci.substring(0, 2))
-                    bv.to = BoardPainter.sq(replyUci.substring(2, 4))
-                }
+                bv.from = BoardPainter.sq(from)
+                bv.to = BoardPainter.sq(to)
                 val san = r.optString("san")
                 val mark = r.optString("mark")
                 val labelText = r.optString("label")
-                val reply = r.optString("reply")
-                val tail = if (r.optBoolean("checkmate")) " \u00b7 checkmate"
-                else if (r.optBoolean("stalemate")) " \u00b7 stalemate"
-                else if (reply.isNotEmpty()) " \u00b7 engine: " + reply
-                else " \u00b7 no engine reply, both sides are yours"
+                val over = r.optBoolean("checkmate") || r.optBoolean("stalemate")
+                // the opponent only moves when Next is tapped
+                bv.enabledTaps = false
+                val tail = when {
+                    r.optBoolean("checkmate") -> " \u00b7 checkmate"
+                    r.optBoolean("stalemate") -> " \u00b7 stalemate"
+                    else -> " \u00b7 tap Next for the engine"
+                }
                 setStatus(
                     san + mark + " \u00b7 " + labelText + fmtLoss(r.optDouble("loss_pct", Double.NaN)) + " \u00b7 " +
                             fmtOdds(r.optDouble("odds_before", Double.NaN)) + " \u2192 " +
                             fmtOdds(r.optDouble("odds_after", Double.NaN)) + tail
                 )
+                if (over) bv.enabledTaps = false
+                )
+            }
+        }.start()
+    }
+
+    /** Plays the engine move for the opponent — on demand, never automatically. */
+    private fun nextReply() {
+        if (busy) return
+        val bv = boardView ?: return
+        if (simFen.isBlank()) {
+            setStatus("Tap Reset to start again")
+            return
+        }
+        busy = true
+        bv.enabledTaps = false
+        setStatus("Engine thinking\u2026")
+        Thread {
+            val outcome = runCatching { py("chess_pick.sim_reply('" + simFen + "','" + simMe + "')") }
+            ui.post {
+                busy = false
+                val r = outcome.getOrNull()
+                if (r == null || !r.optBoolean("ok")) {
+                    setStatus("Not played: " + (r?.optString("error") ?: outcome.exceptionOrNull()?.message ?: "?"))
+                    bv.enabledTaps = true
+                    return@post
+                }
+                val nextFen = r.optString("fen")
+                if (nextFen.isNotBlank()) simFen = nextFen
+                bv.board = BoardPainter.parseFen(simFen)
+                bv.turn = r.optString("turn", simMe)
+                val uci = r.optString("uci")
+                if (uci.length >= 4) {
+                    bv.from = BoardPainter.sq(uci.substring(0, 2))
+                    bv.to = BoardPainter.sq(uci.substring(2, 4))
+                }
+                val over = r.optBoolean("checkmate") || r.optBoolean("stalemate")
+                bv.enabledTaps = !over
+                val tail = when {
+                    r.optBoolean("checkmate") -> " \u00b7 checkmate"
+                    r.optBoolean("stalemate") -> " \u00b7 stalemate"
+                    else -> ""
+                }
+                setStatus("engine: " + r.optString("san") + " \u00b7 " +
+                        fmtOdds(r.optDouble("odds", Double.NaN)) + " odds" + tail)
             }
         }.start()
     }
