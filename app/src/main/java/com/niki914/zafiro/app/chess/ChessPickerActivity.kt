@@ -568,13 +568,13 @@ class ChessPickerActivity : Activity() {
         val work = File(filesDir, "work").absolutePath
         val pylibs = File(filesDir, "pylibs").absolutePath
         val code = buildString {
-            append("import sys, json, io, contextlib\n")
+            append("import sys, json\n")
             append("for p in ('").append(work).append("', '").append(pylibs).append("'):\n")
             append("    sys.path.insert(0, p)\n")
             append("import chess_pick\n")
-            append("_sink = io.StringIO()\n")
-            append("with contextlib.redirect_stdout(_sink):\n")
-            append("    _res = ").append(expr).append("\n")
+            // no redirect_stdout: it replaces the worker stream and runtime.py then
+            // dies on sys.stdout.unbind(); the RESULT marker is parsed by prefix anyway
+            append("_res = ").append(expr).append("\n")
             append("print('RESULT' + json.dumps(_res, ensure_ascii=False))\n")
         }
         val out = runBlocking { PyRuntime.exec(code, CALL_TIMEOUT_MS) }.output
