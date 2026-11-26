@@ -305,12 +305,13 @@ class ChessPickerActivity : Activity() {
 
     private fun playMove(from: String, to: String, bv: ChessBoardView) {
         if (busy) return
+        val fenArg = simFen          // position before the move, for the coach
         busy = true
         bv.enabledTaps = false
         explainView?.text = ""
         setStatus("Checking " + from + "\u2192" + to + "\u2026")
         Thread {
-            val outcome = runCatching { py("chess_pick.sim_move('" + simFen + "','" + from + "','" + to + "','" + simMe + "')") }
+            val outcome = runCatching { py("chess_pick.sim_move('" + fenArg + "','" + from + "','" + to + "','" + simMe + "')") }
             ui.post {
                 busy = false
                 bv.enabledTaps = true
@@ -333,6 +334,7 @@ class ChessPickerActivity : Activity() {
                 val mark = r.optString("mark")
                 val labelText = r.optString("label")
                 val over = r.optBoolean("checkmate") || r.optBoolean("stalemate")
+                val lossPct = r.optDouble("loss_pct", Double.NaN)
                 // the opponent only moves when Next is tapped
                 bv.enabledTaps = false
                 val tail = when {
@@ -341,7 +343,7 @@ class ChessPickerActivity : Activity() {
                     else -> " \u00b7 tap Next for the engine"
                 }
                 setStatus(
-                    san + mark + " \u00b7 " + labelText + fmtLoss(r.optDouble("loss_pct", Double.NaN)) + " \u00b7 " +
+                    san + mark + " \u00b7 " + labelText + fmtLoss(lossPct) + " \u00b7 " +
                             fmtOdds(r.optDouble("odds_before", Double.NaN)) + " \u2192 " +
                             fmtOdds(r.optDouble("odds_after", Double.NaN)) + tail
                 )
