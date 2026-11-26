@@ -235,7 +235,7 @@
             android:launchMode="singleTop"
             android:taskAffinity=""
             android:label="Chess"
-            android:theme="@android:style/Theme.Material.Dialog.NoActionBar" />
+            android:theme="@android:style/Theme.Material.NoActionBar" />
 
         <receiver
             android:name=".chess.ChessWidgetProvider"
