@@ -9,6 +9,7 @@ import android.os.Looper
 import android.text.TextUtils
 import android.view.Gravity
 import android.view.View
+import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -39,6 +40,7 @@ class ChessPickerActivity : Activity() {
     private lateinit var holder: FrameLayout
     private lateinit var statusView: TextView
     private lateinit var coachView: TextView
+    private lateinit var askInput: EditText
     private val ui = Handler(Looper.getMainLooper())
 
     private var busy = false
@@ -105,8 +107,28 @@ class ChessPickerActivity : Activity() {
 
         statusView = label("", 13f, TEXT)
         root.addView(statusView)
-        coachView = label("", 13f, COACH)
+        coachView = label("", 13f, COACH).apply {
+            maxLines = 8
+            ellipsize = TextUtils.TruncateAt.END
+        }
         root.addView(coachView)
+
+        val askRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        askInput = EditText(this).apply {
+            hint = "Ask about this position\u2026"
+            setSingleLine(true)
+            setTextColor(Color.parseColor(TEXT))
+            setHintTextColor(Color.parseColor(MUTED))
+            textSize = 14f
+            setBackgroundColor(Color.parseColor("#2A2A2A"))
+            setPadding(dp(10), dp(8), dp(10), dp(8))
+        }
+        askRow.addView(askInput, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        askRow.addView(button("\u27a4") { sendQuestion() })
+        root.addView(askRow)
 
         val bar1 = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -601,6 +623,47 @@ class ChessPickerActivity : Activity() {
         showBoard()
         setStatus(if (turnOf(simFen) == simMe) "Back \u00b7 your move" else "Back \u00b7 engine to move \u00b7 tap Next")
         saveState()
+    }
+
+    /** Free-form question about the position on the board. */
+    private fun sendQuestion() {
+        val question = askInput.text.toString().trim()
+        if (question.isEmpty()) return
+        if (simFen.isBlank()) {
+            setStatus("Open a game first")
+            return
+        }
+        if (busy) return
+        busy = true
+        askInput.setText("")
+        coachView.text = "coach thinking\u2026"
+        val payload = org.json.JSONObject().apply {
+            put("fen", simFen)
+            put("side", simMe)
+            put("question", question)
+            val lp = lastPayload
+            if (lp != null && !lp.isNull("odds_after")) {
+                val odds = lp.optDouble("odds_after", Double.NaN)
+                if (!odds.isNaN()) put("odds", odds)
+            }
+            if (lp != null && lp.has("best")) put("best", lp.optString("best"))
+        }
+        Thread {
+            val b64 = android.util.Base64.encodeToString(
+                payload.toString().toByteArray(), android.util.Base64.NO_WRAP
+            )
+            val outcome = runCatching { py("chess_pick.ask('" + b64 + "')") }
+            ui.post {
+                busy = false
+                val r = outcome.getOrNull()
+                coachView.text = if (r == null || !r.optBoolean("ok")) {
+                    "coach: " + (r?.optString("error") ?: outcome.exceptionOrNull()?.message ?: "?")
+                } else {
+                    "you: " + question + "\ncoach (" + r.optString("model") + "): " + r.optString("text")
+                }
+                saveState()
+            }
+        }.start()
     }
 
     // --------------------------------------------------------------- coach --
