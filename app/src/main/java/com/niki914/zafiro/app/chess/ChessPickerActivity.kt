@@ -62,7 +62,12 @@ class ChessPickerActivity : Activity() {
         val last: String,
     )
 
-    private class SimState(var fen: String, val history: MutableList<String> = ArrayList())
+    private class SimState(
+        var fen: String,
+        val history: MutableList<String> = ArrayList(),
+        /** "you played e4", "opponent played Bf6", "engine replied Nh4" */
+        val moves: MutableList<String> = ArrayList(),
+    )
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -214,6 +219,9 @@ class ChessPickerActivity : Activity() {
                 val h = org.json.JSONArray()
                 for (f in st.history) h.put(f)
                 put("history", h)
+                val mv = org.json.JSONArray()
+                for (m in st.moves) mv.put(m)
+                put("moves", mv)
             })
             o.put("sims", simsObj)
             stateFile.parentFile?.mkdirs()
@@ -250,7 +258,10 @@ class ChessPickerActivity : Activity() {
                 val hist = ArrayList<String>()
                 val h = s.optJSONArray("history")
                 if (h != null) for (i in 0 until h.length()) hist.add(h.optString(i))
-                sims[id] = SimState(s.optString("fen"), hist)
+                val log = ArrayList<String>()
+                val mv = s.optJSONArray("moves")
+                if (mv != null) for (i in 0 until mv.length()) log.add(mv.optString(i))
+                sims[id] = SimState(s.optString("fen"), hist, log)
             }
             statusView.text = o.optString("status", "")
             coachView.text = o.optString("coach", "")
@@ -538,6 +549,9 @@ class ChessPickerActivity : Activity() {
                     put("side", simMe)
                     put("mover", "you")
                 }
+                sims[game.id]?.moves?.add(
+                    (if (turnOf(fenArg) == simMe) "you played " else "opponent played ") + san
+                )
                 saveState()
             }
         }.start()
@@ -602,6 +616,10 @@ class ChessPickerActivity : Activity() {
                     put("side", simMe)
                     put("mover", "engine")
                 }
+                sims[game.id]?.moves?.add(
+                    if (r.optBoolean("mine")) "engine played " + r.optString("san") + " for you"
+                    else "engine replied " + r.optString("san")
+                )
                 saveState()
             }
         }.start()
@@ -617,6 +635,7 @@ class ChessPickerActivity : Activity() {
             return
         }
         simFen = history.removeAt(history.size - 1)
+        sims[game.id]?.moves?.let { if (it.isNotEmpty()) it.removeAt(it.size - 1) }
         sims[game.id]?.fen = simFen
         coachView.text = ""
         lastPayload = null
@@ -647,6 +666,9 @@ class ChessPickerActivity : Activity() {
                 if (!odds.isNaN()) put("odds", odds)
             }
             if (lp != null && lp.has("best")) put("best", lp.optString("best"))
+            val log = currentGame()?.let { sims[it.id]?.moves } ?: emptyList<String>()
+            if (log.isNotEmpty()) put("last_move", log.last())
+            if (log.size > 1) put("recent", log.takeLast(4).joinToString(", "))
         }
         Thread {
             val b64 = android.util.Base64.encodeToString(
