@@ -333,6 +333,8 @@ class ChessPickerActivity : Activity() {
         if (games.isEmpty()) return
         index = (index + delta + games.size) % games.size
         showingList = false
+        // a different game starts from the real position, never from a cached simulation
+        sims.remove(games[index].id)
         openSim(games[index])
         saveState()
     }
@@ -361,6 +363,7 @@ class ChessPickerActivity : Activity() {
             box.setOnClickListener {
                 index = i
                 showingList = false
+                sims.remove(g.id)
                 openSim(g)
             }
             column.addView(box)
