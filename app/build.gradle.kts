@@ -23,8 +23,8 @@ android {
         applicationId = "com.niki914.zafiro.evergrow"
         minSdk = 26
         targetSdk = 34
-        versionName = "1.8.20"
-        versionCode = 33
+        versionName = "1.8.21"
+        versionCode = 34
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         ndk {

@@ -12,6 +12,8 @@
         android:layout_height="match_parent"
         android:adjustViewBounds="true"
         android:scaleType="fitCenter"
+        android:paddingTop="14dp"
+        android:paddingBottom="28dp"
         android:contentDescription="Chess board" />
 
     <TextView

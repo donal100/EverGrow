@@ -148,6 +148,7 @@ class ChessPickerActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
+        bar2.addView(button("\u2328 FEN") { fenDialog() })
         bar2.addView(button("\u21bb Widget") { currentGame()?.let { analyseForWidget(it) } })
         bar2.addView(button("\u21ba Reset") { currentGame()?.let { resetSim(it) } })
         bar2.addView(button("\u2715 Close") { finish() })
@@ -688,6 +689,80 @@ class ChessPickerActivity : Activity() {
                 } else {
                     "you: " + question + "\ncoach (" + r.optString("model") + "): " + r.optString("text")
                 }
+                saveState()
+            }
+        }.start()
+    }
+
+    // ------------------------------------------------------------- ad-hoc --
+
+    /** Any position: paste a FEN (a photo read, a puzzle, a what-if) and analyse it. */
+    private fun fenDialog() {
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(8), dp(18), 0)
+        }
+        val input = EditText(this).apply {
+            hint = "8/8/8/8/8/8/8/8 w - - 0 1"
+            minLines = 2
+            setSingleLine(false)
+        }
+        val blackSide = android.widget.CheckBox(this).apply {
+            text = "I play Black"
+            setTextColor(Color.parseColor(TEXT))
+        }
+        box.addView(input)
+        box.addView(blackSide)
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Ad-hoc position")
+            .setView(box)
+            .setPositiveButton("Load") { _, _ ->
+                loadFen(input.text.toString().trim(), if (blackSide.isChecked) "black" else "white")
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun loadFen(fen: String, me: String) {
+        if (fen.isBlank()) {
+            setStatus("Paste a FEN first")
+            return
+        }
+        busy = true
+        setStatus("Loading position\u2026")
+        coachView.text = ""
+        lastPayload = null
+        val payload = org.json.JSONObject().apply {
+            put("fen", fen)
+            put("me", me)
+            put("label", "position")
+        }
+        Thread {
+            val b64 = android.util.Base64.encodeToString(
+                payload.toString().toByteArray(), android.util.Base64.NO_WRAP
+            )
+            val outcome = runCatching { py("chess_pick.adopt('" + b64 + "')") }
+            ui.post {
+                busy = false
+                val r = outcome.getOrNull()
+                if (r == null || !r.optBoolean("ok")) {
+                    setStatus("Not loaded: " + (r?.optString("error") ?: outcome.exceptionOrNull()?.message ?: "?"))
+                    return@post
+                }
+                val game = Game("adhoc", "Position", me, 0, "\u2014")
+                games = listOf(game)
+                index = 0
+                simMe = me
+                simFen = r.optString("fen", fen)
+                sims.clear()
+                sims["adhoc"] = SimState(simFen)
+                showBoard()
+                headerTitle.text = "Ad-hoc \u00b7 " + me
+                setStatus(
+                    "Position \u00b7 " + fmtOdds(r.optDouble("odds", Double.NaN)) + " odds \u00b7 best " +
+                            r.optString("best") + " \u00b7 " + r.optString("source")
+                )
+                ChessWidgetProvider.refresh(this)
                 saveState()
             }
         }.start()

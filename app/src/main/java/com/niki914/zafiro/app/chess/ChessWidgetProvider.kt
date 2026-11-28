@@ -132,8 +132,10 @@ class ChessWidgetProvider : AppWidgetProvider() {
             if (odds.isNaN()) odds = data.optDouble("odds", Double.NaN)
             if (eval.isNaN()) eval = data.optDouble("eval", Double.NaN)
         }
+        // the engine eval is White-relative; show it from the side the user plays
+        val shown = if (data.optString("me") == "black" && !eval.isNaN()) -eval else eval
         val pct = if (odds.isNaN()) null else odds.roundToInt().toString() + "%"
-        val ev = if (eval.isNaN()) null else (if (eval > 0) "+" else "") + String.format("%.2f", eval)
+        val ev = if (shown.isNaN()) null else (if (shown > 0) "+" else "") + String.format("%.2f", shown)
         return when {
             pct != null && ev != null -> pct + " \u00b7 " + ev
             pct != null -> pct
