@@ -755,29 +755,64 @@ class ChessPickerActivity : Activity() {
 
     /** Any position: paste a FEN (a photo read, a puzzle, a what-if) and analyse it. */
     private fun fenDialog() {
+        val cm = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
+        val clip = cm.primaryClip
+        val clipText = if (clip != null && clip.itemCount > 0) {
+            clip.getItemAt(0).coerceToText(this).toString().trim()
+        } else ""
+
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(18), dp(8), dp(18), 0)
         }
         val input = EditText(this).apply {
-            hint = "8/8/8/8/8/8/8/8 w - - 0 1"
+            hint = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
             minLines = 2
             setSingleLine(false)
+            typeface = android.graphics.Typeface.MONOSPACE
+            setTextColor(Color.parseColor(TEXT))
+            setHintTextColor(Color.parseColor(MUTED))
+            if (looksLikeFen(clipText)) setText(clipText)
         }
         val blackSide = android.widget.CheckBox(this).apply {
             text = "I play Black"
             setTextColor(Color.parseColor(TEXT))
         }
+        val paste = button("\u2398 Paste from clipboard") {
+            if (clipText.isNotEmpty()) {
+                input.setText(clipText)
+                input.setSelection(clipText.length)
+            } else {
+                setStatus("Clipboard is empty")
+            }
+        }
         box.addView(input)
+        box.addView(paste)
         box.addView(blackSide)
+
         android.app.AlertDialog.Builder(this)
             .setTitle("Ad-hoc position")
             .setView(box)
             .setPositiveButton("Load") { _, _ ->
-                loadFen(input.text.toString().trim(), if (blackSide.isChecked) "black" else "white")
+                val fen = input.text.toString().trim()
+                if (!looksLikeFen(fen)) {
+                    setStatus("That isn't a FEN \u2014 it needs 8 rows, like 8/8/8/8/8/8/8/8 w - - 0 1")
+                } else {
+                    loadFen(fen, if (blackSide.isChecked) "black" else "white")
+                }
             }
             .setNegativeButton("Cancel", null)
             .show()
+    }
+
+    /** Cheap client-side gate so a stray string never reaches the engine as a position. */
+    private fun looksLikeFen(text: String): Boolean {
+        val parts = text.trim().split(Regex("\\s+"))
+        if (parts.size < 2) return false
+        val rows = parts[0].split("/")
+        if (rows.size != 8) return false
+        if (!rows.all { it.matches(Regex("[rnbqkpRNBQKP1-8]+")) }) return false
+        return parts[1] == "w" || parts[1] == "b"
     }
 
     private fun loadFen(fen: String, me: String) {
