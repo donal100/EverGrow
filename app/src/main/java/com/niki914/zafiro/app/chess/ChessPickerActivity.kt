@@ -53,6 +53,8 @@ class ChessPickerActivity : Activity() {
     private var simMe = "white"
     private var simFen = ""
     private val sims = HashMap<String, SimState>()
+    /** Opponents seen so far — needed to find games that are waiting on them. */
+    private val known = LinkedHashSet<String>()
 
     private data class Game(
         val id: String,
@@ -60,6 +62,7 @@ class ChessPickerActivity : Activity() {
         val colour: String,
         val plies: Int,
         val last: String,
+        val waiting: Boolean = false,
     )
 
     private class SimState(
@@ -212,8 +215,10 @@ class ChessPickerActivity : Activity() {
                 put("colour", g.colour)
                 put("plies", g.plies)
                 put("last", g.last)
+                put("waiting", g.waiting)
             })
             o.put("games", arr)
+            o.put("known", org.json.JSONArray(known.toList()))
             val simsObj = JSONObject()
             for ((id, st) in sims) simsObj.put(id, JSONObject().apply {
                 put("fen", st.fen)
@@ -236,6 +241,8 @@ class ChessPickerActivity : Activity() {
             val f = stateFile
             if (!f.exists()) return false
             val o = JSONObject(f.readText())
+            val kn = o.optJSONArray("known")
+            if (kn != null) for (i in 0 until kn.length()) known.add(kn.optString(i))
             val arr = o.optJSONArray("games") ?: return false
             val list = ArrayList<Game>()
             for (i in 0 until arr.length()) {
@@ -243,7 +250,7 @@ class ChessPickerActivity : Activity() {
                 list.add(
                     Game(
                         g.optString("id"), g.optString("opponent"), g.optString("colour"),
-                        g.optInt("plies"), g.optString("last")
+                        g.optInt("plies"), g.optString("last"), g.optBoolean("waiting", false)
                     )
                 )
             }
@@ -301,9 +308,11 @@ class ChessPickerActivity : Activity() {
                         setStatus("Nothing to play \u2014 \u27f3 retries")
                     }
                     else -> {
+                        known.addAll(loaded.map { it.opponent })
                         games = loaded
                         if (index >= games.size) index = 0
                         openSim(games[index])
+                        fetchWaiting()
                     }
                 }
             }
@@ -326,6 +335,44 @@ class ChessPickerActivity : Activity() {
                 index = if (same >= 0) same else 0
                 headerTitle.text = headerForIndex()
                 saveState()
+            }
+        }.start()
+    }
+
+    /** Games where it is the opponent's move: found through their own to-move feeds. */
+    private fun fetchWaiting() {
+        val names = known.toList()
+        if (names.isEmpty()) return
+        Thread {
+            val outcome = runCatching {
+                val b64 = android.util.Base64.encodeToString(
+                    org.json.JSONArray(names).toString().toByteArray(), android.util.Base64.NO_WRAP
+                )
+                py("chess_pick.waiting('" + b64 + "')")
+            }
+            val r = outcome.getOrNull() ?: return@Thread
+            val arr = r.optJSONArray("games") ?: return@Thread
+            val extra = ArrayList<Game>()
+            for (i in 0 until arr.length()) {
+                val g = arr.optJSONObject(i) ?: continue
+                extra.add(
+                    Game(
+                        g.optString("id"), g.optString("opponent"), g.optString("colour"),
+                        g.optInt("plies"), g.optString("last"), true
+                    )
+                )
+            }
+            if (extra.isEmpty()) return@Thread
+            ui.post {
+                val have = games.map { it.id }.toSet()
+                val merged = games + extra.filter { it.id !in have }
+                if (merged.size != games.size) {
+                    known.addAll(extra.map { it.opponent })
+                    games = merged
+                    if (showingList) renderList()
+                    if (games.isNotEmpty() && !showingList) headerTitle.text = headerForIndex()
+                    saveState()
+                }
             }
         }.start()
     }
@@ -359,7 +406,8 @@ class ChessPickerActivity : Activity() {
                 orientation = LinearLayout.VERTICAL
                 setPadding(dp(4), dp(10), dp(4), dp(10))
             }
-            box.addView(label(g.opponent + " \u00b7 you are " + g.colour, 16f, TEXT))
+            val suffix = if (g.waiting) " \u00b7 their move" else ""
+            box.addView(label(g.opponent + " \u00b7 you are " + g.colour + suffix, 16f, TEXT))
             box.addView(label("ply " + g.plies + " \u00b7 last " + g.last, 12f, MUTED))
             box.setOnClickListener {
                 index = i
@@ -373,6 +421,15 @@ class ChessPickerActivity : Activity() {
                 layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(1))
             })
         }
+        val adhoc = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(4), dp(12), dp(4), dp(12))
+        }
+        adhoc.addView(label("\uff0b Ad-hoc position", 16f, "#9FD08A"))
+        adhoc.addView(label("paste a FEN \u00b7 photo read \u00b7 puzzle", 12f, MUTED))
+        adhoc.setOnClickListener { fenDialog() }
+        column.addView(adhoc)
+
         holder.addView(ScrollView(this).apply { addView(column) })
         headerTitle.text = "Games \u00b7 tap to go back"
     }
