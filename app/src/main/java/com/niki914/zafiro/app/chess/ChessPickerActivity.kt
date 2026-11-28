@@ -84,7 +84,7 @@ class ChessPickerActivity : Activity() {
         buildSkeleton()
         if (restoreState()) {
             headerTitle.text = headerForIndex()
-            if (simFen.isNotBlank()) showBoard()
+            currentGame()?.let { openSim(it) }
             refreshGamesQuietly()
         } else {
             reloadGames()
@@ -271,7 +271,7 @@ class ChessPickerActivity : Activity() {
                 if (mv != null) for (i in 0 until mv.length()) log.add(mv.optString(i))
                 sims[id] = SimState(s.optString("fen"), hist, log)
             }
-            statusView.text = o.optString("status", "")
+            statusView.text = "" // rebuilt by openSim: never come back to an old error
             coachView.text = o.optString("coach", "")
             true
         } catch (_: Throwable) {
@@ -331,10 +331,13 @@ class ChessPickerActivity : Activity() {
             ui.post {
                 val current = games.getOrNull(index)
                 games = loaded
+                known.addAll(loaded.map { it.opponent })
                 val same = games.indexOfFirst { it.id == current?.id }
                 index = if (same >= 0) same else 0
-                headerTitle.text = headerForIndex()
+                if (!showingList) headerTitle.text = headerForIndex()
                 saveState()
+                // games where the opponent has the move are only visible through their feeds
+                fetchWaiting()
             }
         }.start()
     }
@@ -396,6 +399,8 @@ class ChessPickerActivity : Activity() {
     private fun renderList() {
         holder.removeAllViews()
         boardView = null
+        // the status line belongs to the board, not to the game list
+        statusView.visibility = View.GONE
         val column = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(4), dp(4), dp(4), dp(4))
@@ -410,9 +415,9 @@ class ChessPickerActivity : Activity() {
             box.addView(label(g.opponent + " \u00b7 you are " + g.colour + suffix, 16f, TEXT))
             box.addView(label("ply " + g.plies + " \u00b7 last " + g.last, 12f, MUTED))
             box.setOnClickListener {
+                if (games.getOrNull(index)?.id != g.id) sims.remove(g.id)
                 index = i
                 showingList = false
-                sims.remove(g.id)
                 openSim(g)
             }
             column.addView(box)
@@ -527,6 +532,7 @@ class ChessPickerActivity : Activity() {
     private fun oddsFromBoard(): Double = Double.NaN
 
     private fun showBoard() {
+        statusView.visibility = View.VISIBLE
         val bv: ChessBoardView = boardView ?: run {
             val fresh = ChessBoardView(this)
             fresh.onMove = { from, to -> playMove(from, to, fresh) }
@@ -790,19 +796,26 @@ class ChessPickerActivity : Activity() {
         box.addView(paste)
         box.addView(blackSide)
 
-        android.app.AlertDialog.Builder(this)
+        val dlg = android.app.AlertDialog.Builder(this)
             .setTitle("Ad-hoc position")
             .setView(box)
-            .setPositiveButton("Load") { _, _ ->
+            .setPositiveButton("Load", null)
+            .setNegativeButton("Cancel", null)
+            .create()
+        dlg.setOnShowListener {
+            dlg.getButton(android.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 val fen = input.text.toString().trim()
                 if (!looksLikeFen(fen)) {
-                    setStatus("That isn't a FEN \u2014 it needs 8 rows, like 8/8/8/8/8/8/8/8 w - - 0 1")
+                    // keep the dialog open: the text is still there to fix
+                    input.error = "Needs 8 rows, like 8/8/8/8/8/8/8/8 w - - 0 1"
                 } else {
+                    setStatus("")
+                    dlg.dismiss()
                     loadFen(fen, if (blackSide.isChecked) "black" else "white")
                 }
             }
-            .setNegativeButton("Cancel", null)
-            .show()
+        }
+        dlg.show()
     }
 
     /** Cheap client-side gate so a stray string never reaches the engine as a position. */
