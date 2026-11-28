@@ -56,6 +56,9 @@ class ChessPickerActivity : Activity() {
     /** Opponents seen so far — needed to find games that are waiting on them. */
     private val known = LinkedHashSet<String>()
 
+    /** The ad-hoc position is a row in the list like any game, so it survives a refresh. */
+    private companion object { const val ADHOC = "adhoc" }
+
     private data class Game(
         val id: String,
         val opponent: String,
@@ -309,7 +312,8 @@ class ChessPickerActivity : Activity() {
                     }
                     else -> {
                         known.addAll(loaded.map { it.opponent })
-                        games = loaded
+                        val keep = games.firstOrNull { it.id == ADHOC }
+                        games = if (keep != null) listOf(keep) + loaded else loaded
                         if (index >= games.size) index = 0
                         openSim(games[index])
                         fetchWaiting()
@@ -330,8 +334,10 @@ class ChessPickerActivity : Activity() {
             if (loaded == null || loaded.isEmpty()) return@Thread
             ui.post {
                 val current = games.getOrNull(index)
+                val keep = games.firstOrNull { it.id == ADHOC }
+                val base = if (keep != null) listOf(keep) + loaded.filter { it.id != ADHOC } else loaded
                 // a game waiting on the opponent is not in the to-move list: keep it on screen
-                games = if (current != null && loaded.none { it.id == current.id }) loaded + current else loaded
+                games = if (current != null && base.none { it.id == current.id }) base + current else base
                 known.addAll(loaded.map { it.opponent })
                 val same = games.indexOfFirst { it.id == current?.id }
                 index = if (same >= 0) same else 0
@@ -413,8 +419,13 @@ class ChessPickerActivity : Activity() {
                 setPadding(dp(4), dp(10), dp(4), dp(10))
             }
             val suffix = if (g.waiting) " \u00b7 their move" else ""
-            box.addView(label(g.opponent + " \u00b7 you are " + g.colour + suffix, 16f, TEXT))
-            box.addView(label("ply " + g.plies + " \u00b7 last " + g.last, 12f, MUTED))
+            if (g.id == ADHOC) {
+                box.addView(label("Ad-hoc \u00b7 you are " + g.colour, 16f, TEXT))
+                box.addView(label("your own position \u00b7 tap to open", 12f, MUTED))
+            } else {
+                box.addView(label(g.opponent + " \u00b7 you are " + g.colour + suffix, 16f, TEXT))
+                box.addView(label("ply " + g.plies + " \u00b7 last " + g.last, 12f, MUTED))
+            }
             box.setOnClickListener {
                 if (games.getOrNull(index)?.id != g.id) sims.remove(g.id)
                 index = i
@@ -491,6 +502,18 @@ class ChessPickerActivity : Activity() {
     // ----------------------------------------------------------- simulation --
 
     private fun openSim(game: Game) {
+        if (game.id == ADHOC) {
+            val cached = sims[ADHOC]
+            if (cached != null) {
+                simMe = game.colour
+                simFen = cached.fen
+                headerTitle.text = "Ad-hoc \u00b7 " + game.colour
+                showBoard()
+                setStatus("Position \u00b7 taps are simulation only")
+                saveState()
+                return
+            }
+        }
         headerTitle.text = "vs " + game.opponent + " \u00b7 " + game.colour +
                 " \u00b7 " + (index + 1) + "/" + games.size
         coachView.text = ""
@@ -855,13 +878,12 @@ class ChessPickerActivity : Activity() {
                     setStatus("Not loaded: " + (r?.optString("error") ?: outcome.exceptionOrNull()?.message ?: "?"))
                     return@post
                 }
-                val game = Game("adhoc", "Position", me, 0, "\u2014")
-                games = listOf(game)
+                val game = Game(ADHOC, "Ad-hoc", me, 0, "\u2014")
+                games = listOf(game) + games.filter { it.id != ADHOC }
                 index = 0
                 simMe = me
                 simFen = r.optString("fen", fen)
-                sims.clear()
-                sims["adhoc"] = SimState(simFen)
+                sims[ADHOC] = SimState(simFen)
                 showBoard()
                 headerTitle.text = "Ad-hoc \u00b7 " + me
                 setStatus(
