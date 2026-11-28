@@ -56,9 +56,6 @@ class ChessPickerActivity : Activity() {
     /** Opponents seen so far — needed to find games that are waiting on them. */
     private val known = LinkedHashSet<String>()
 
-    /** The ad-hoc position is a row in the list like any game, so it survives a refresh. */
-    private companion object { const val ADHOC = "adhoc" }
-
     private data class Game(
         val id: String,
         val opponent: String,
@@ -993,6 +990,8 @@ class ChessPickerActivity : Activity() {
     }
 
     private companion object {
+        /** The ad-hoc position is a row in the list like any game, so it survives a refresh. */
+        const val ADHOC = "adhoc"
         const val ME = "ConfirmableMotorcycle"
         const val CALL_TIMEOUT_MS = 120_000L
         const val SQUARES = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!?"
