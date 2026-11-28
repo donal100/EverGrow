@@ -482,7 +482,7 @@ class ChessPickerActivity : Activity() {
         bv.flip = simMe == "black"
         bv.board = BoardPainter.parseFen(simFen)
         bv.turn = turnOf(simFen)
-        bv.enabledTaps = turnOf(simFen) == simMe
+        bv.enabledTaps = true
         bv.from = null
         bv.to = null
         bv.invalidate()
@@ -525,7 +525,9 @@ class ChessPickerActivity : Activity() {
                 bv.turn = r.optString("turn", simMe)
                 bv.from = BoardPainter.sq(from)
                 bv.to = BoardPainter.sq(to)
-                bv.enabledTaps = false
+                val over = r.optBoolean("checkmate") || r.optBoolean("stalemate")
+                // either colour's move is fine from here: the board follows the side to move
+                bv.enabledTaps = !over
                 val san = r.optString("san")
                 val mark = r.optString("mark")
                 val labelText = r.optString("label")
@@ -533,7 +535,7 @@ class ChessPickerActivity : Activity() {
                 val tail = when {
                     r.optBoolean("checkmate") -> " \u00b7 checkmate"
                     r.optBoolean("stalemate") -> " \u00b7 stalemate"
-                    else -> " \u00b7 tap Next for the engine"
+                    else -> " \u00b7 move the other side, or tap Next for the engine"
                 }
                 setStatus(
                     san + mark + " \u00b7 " + labelText + fmtLoss(lossPct) + " \u00b7 " +
@@ -598,7 +600,7 @@ class ChessPickerActivity : Activity() {
                     bv.to = BoardPainter.sq(uci.substring(2, 4))
                 }
                 val over = r.optBoolean("checkmate") || r.optBoolean("stalemate")
-                bv.enabledTaps = !over && r.optString("turn") == simMe
+                bv.enabledTaps = !over
                 val tail = when {
                     r.optBoolean("checkmate") -> " \u00b7 checkmate"
                     r.optBoolean("stalemate") -> " \u00b7 stalemate"
