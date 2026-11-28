@@ -330,7 +330,8 @@ class ChessPickerActivity : Activity() {
             if (loaded == null || loaded.isEmpty()) return@Thread
             ui.post {
                 val current = games.getOrNull(index)
-                games = loaded
+                // a game waiting on the opponent is not in the to-move list: keep it on screen
+                games = if (current != null && loaded.none { it.id == current.id }) loaded + current else loaded
                 known.addAll(loaded.map { it.opponent })
                 val same = games.indexOfFirst { it.id == current?.id }
                 index = if (same >= 0) same else 0
