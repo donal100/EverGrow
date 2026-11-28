@@ -182,6 +182,8 @@ class ChessPickerActivity : Activity() {
 
     private fun setStatus(text: String) {
         statusView.text = text
+        // a message must never be swallowed by the game list
+        if (text.isNotBlank()) statusView.visibility = View.VISIBLE
     }
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
@@ -501,7 +503,7 @@ class ChessPickerActivity : Activity() {
     private fun openSim(game: Game) {
         if (game.id == ADHOC) {
             val cached = sims[ADHOC]
-            if (cached != null) {
+            if (cached != null && cached.fen.isNotBlank()) {
                 simMe = game.colour
                 simFen = cached.fen
                 headerTitle.text = "Ad-hoc \u00b7 " + game.colour
@@ -510,6 +512,11 @@ class ChessPickerActivity : Activity() {
                 saveState()
                 return
             }
+            // never ask chess.com about a position that is not a game
+            showingList = false
+            headerTitle.text = "Ad-hoc \u00b7 " + game.colour
+            setStatus("Ad-hoc position is empty \u2014 load one with \u2328 FEN")
+            return
         }
         headerTitle.text = "vs " + game.opponent + " \u00b7 " + game.colour +
                 " \u00b7 " + (index + 1) + "/" + games.size
